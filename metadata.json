@@ -1,0 +1,10 @@
+{
+  "name": "Copy of  MindGuard",
+  "description": "MindGuard is a Student Mental Wellness Tracking App that helps students manage stress, track moods, and engage in mindful activities. It allows parents to stay informed through automated wellness reports while promoting responsible phone usage and emotional awareness.",
+  "requestFramePermissions": [
+    "camera"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

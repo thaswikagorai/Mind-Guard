@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MindGuard - Student Mental Wellness & Daily Affirmations</title>
+    <meta name="description" content="MindGuard is a Student Mental Wellness Tracking App that helps students manage stress, track moods, and engage in mindful activities with daily personalized affirmations." />
+    <meta property="og:title" content="MindGuard - Student Mental Wellness & Daily Affirmations" />
+    <meta property="og:description" content="MindGuard is a Student Mental Wellness Tracking App that helps students manage stress, track moods, and engage in mindful activities with daily personalized affirmations." />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600&family=Playfair+Display:wght@600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --mg-canvas: #eefaf7;
+        --mg-surface: #ffffff;
+        --mg-surface-soft: #e4f8f4;
+        --mg-surface-indigo: #eef2ff;
+        --mg-border: #bfe5de;
+        --mg-ink: #0f3d3e;
+        --mg-ink-muted: #3d6b6d;
+        --mg-accent: #0d9488;
+        --mg-accent-hover: #0f766e;
+        --mg-indigo: #4f46e5;
+      }
+      body {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+        background: linear-gradient(135deg, #dff8f2 0%, #e9f4ff 52%, #fff2eb 100%);
+        color: var(--mg-ink);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      .font-serif-elegant {
+        font-family: 'Playfair Display', Georgia, serif;
+      }
+      .font-wellness {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      }
+      .font-accent,
+      .font-script {
+        font-family: 'Playfair Display', Georgia, serif;
+        font-style: italic;
+      }
+      .font-mono-num {
+        font-family: 'JetBrains Mono', monospace;
+        font-variant-numeric: tabular-nums;
+      }
+      .text-balance {
+        text-wrap: balance;
+      }
+      .glass-card {
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(204, 231, 227, 0.8);
+      }
+      .no-scrollbar::-webkit-scrollbar,
+      .scrollbar-none::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar,
+      .scrollbar-none {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "recharts": "https://aistudiocdn.com/recharts@^3.4.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
