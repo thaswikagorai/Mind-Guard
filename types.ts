@@ -259,3 +259,19 @@ export interface CheckInNotificationSettings {
   customMessage: string;
   lastNotifiedDate: string | null; // "YYYY-MM-DD"
 }
+
+export interface LiteratureClockQuote {
+  time: string;
+  quoteFirst: string;
+  quoteTimeCase: string;
+  quoteLast: string;
+  title: string;
+  author: string;
+  isExactMinute: boolean;
+}
+
+export interface LiteratureClockResponse {
+  time: string;
+  quotes: LiteratureClockQuote[];
+  source: 'literature-clock' | 'classic-fallback';
+}

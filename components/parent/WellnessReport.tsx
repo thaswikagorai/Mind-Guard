@@ -3,6 +3,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { STUDENT_DATA } from '../../constants';
 import { generateParentSummary, generateParentActionPlan } from '../../services/geminiService';
 import Card from '../common/Card';
+import LiteratureClockCard from '../common/LiteratureClockCard';
 import { BellIcon, CheckCircleIcon, LightbulbIcon, SparklesIcon } from '../icons';
 
 interface WellnessReportProps {
@@ -14,6 +15,17 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
   const [actionPlan, setActionPlan] = useState<string[]>([]);
   const [isLoadingSummary, setIsLoadingSummary] = useState(true);
   const [isLoadingPlan, setIsLoadingPlan] = useState(true);
+  const [dailyStressScore, setDailyStressScore] = useState<number | null>(null);
+
+  useEffect(() => {
+    const raw = localStorage.getItem('mindguard_latest_stress_score');
+    if (raw !== null) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed)) {
+        setDailyStressScore(Math.max(0, Math.min(100, Math.round(parsed))));
+      }
+    }
+  }, []);
 
   const studentData = STUDENT_DATA[childsEmail] || STUDENT_DATA['default'];
   const { stressReport: reportData, alerts, activityLog } = studentData;
@@ -100,6 +112,44 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
 
   return (
     <div className="p-4 sm:p-6 space-y-6 pb-16">
+      {/* Daily Stress Notification Banner when student has checked in */}
+      {dailyStressScore !== null && (
+        <Card
+          className={`p-4 border flex flex-wrap items-center justify-between gap-3 ${
+            dailyStressScore >= 65
+              ? 'bg-rose-50 border-rose-200'
+              : dailyStressScore >= 40
+              ? 'bg-amber-50 border-amber-200'
+              : 'bg-[#e6faf6] border-[#99e2d8]'
+          }`}
+        >
+          <div className="flex items-center space-x-3">
+            <BellIcon
+              className={`w-5 h-5 shrink-0 ${
+                dailyStressScore >= 65
+                  ? 'text-rose-600'
+                  : dailyStressScore >= 40
+                  ? 'text-amber-600'
+                  : 'text-[#0d9488]'
+              }`}
+            />
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-[#0f3d3e]">
+                Latest Daily Stress Notification
+              </p>
+              <p className="text-xs sm:text-sm text-[#335c5d]">
+                Most recent student check-in level:{' '}
+                <strong className="font-mono-num text-[#0f3d3e]">{dailyStressScore}/100</strong>{' '}
+                ({dailyStressScore >= 65 ? 'High — consider a gentle check-in' : dailyStressScore >= 40 ? 'Moderate load' : 'Low / Calm'}).
+              </p>
+            </div>
+          </div>
+          <span className="text-xs font-semibold font-mono-num text-[#4b7476]">
+            Updated Early Nov
+          </span>
+        </Card>
+      )}
+
       {/* Top Grid: AI Insight + Monthly Delta */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
         <div className="lg:col-span-8 flex flex-col">
@@ -142,18 +192,22 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
       {/* Middle Grid: Trend Chart + Action Plan */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-stretch">
         <section className="lg:col-span-7 flex flex-col">
-          <h2 className="text-lg font-bold text-[#0f3d3e] mb-3 font-serif-elegant">
-            Stress Analytics Trend
-          </h2>
+          <div className="flex items-baseline justify-between mb-3 gap-2">
+            <h2 className="text-lg font-bold text-[#0f3d3e] font-serif-elegant">
+              Stress Analytics Trend
+            </h2>
+            <span className="text-xs font-medium text-[#4b7476]">January – Early November</span>
+          </div>
           <Card className="h-72 w-full p-4 bg-white border border-[#cce7e3] flex-grow">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={reportData}>
+              <LineChart data={reportData} margin={{ top: 8, right: 12, left: -12, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#dff1ee" />
                 <XAxis
                   dataKey="name"
+                  interval={0}
                   axisLine={false}
                   tickLine={false}
-                  tick={{ fontSize: 11, fill: '#4b7476' }}
+                  tick={{ fontSize: 10.5, fill: '#4b7476' }}
                 />
                 <YAxis
                   axisLine={false}
@@ -173,9 +227,10 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
                 <Line
                   type="monotone"
                   dataKey="stressLevel"
+                  connectNulls
                   stroke="#0d9488"
                   strokeWidth={3.5}
-                  dot={{ r: 5, fill: '#0d9488', strokeWidth: 2, stroke: '#fff' }}
+                  dot={{ r: 4.5, fill: '#0d9488', strokeWidth: 2, stroke: '#fff' }}
                   activeDot={{ r: 7, strokeWidth: 0, fill: '#0f3d3e' }}
                 />
               </LineChart>
@@ -246,29 +301,55 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
         </div>
       </section>
 
-      {/* Alerts Section - Clean Hairline Borders, No border-l-4 */}
-      <section>
-        <h3 className="text-lg font-bold text-[#0f3d3e] mb-3 font-serif-elegant">Wellness Notes</h3>
-        <div className="space-y-3">
-          {alerts.map((alert) => {
-            const tone = alertSeverityClasses[alert.severity];
-            return (
-              <Card
-                key={alert.id}
-                className={`${tone.bg} border ${tone.border} flex items-start space-x-3 p-4`}
-              >
-                {tone.icon}
-                <div>
-                  <p className={`${tone.text} font-semibold text-sm leading-snug`}>{alert.message}</p>
-                  <p className={`text-xs ${tone.text} opacity-75 mt-1`}>
-                    {tone.label} · {alert.date}
-                  </p>
+      {/* Alerts & Activity Timeline (Jan – Early Nov) */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
+        <section className="lg:col-span-7">
+          <h3 className="text-lg font-bold text-[#0f3d3e] mb-3 font-serif-elegant">
+            Wellness Notes (Jan – Early Nov)
+          </h3>
+          <div className="space-y-3">
+            {alerts.map((alert) => {
+              const tone = alertSeverityClasses[alert.severity];
+              return (
+                <Card
+                  key={alert.id}
+                  className={`${tone.bg} border ${tone.border} flex items-start space-x-3 p-4`}
+                >
+                  {tone.icon}
+                  <div>
+                    <p className={`${tone.text} font-semibold text-sm leading-snug`}>{alert.message}</p>
+                    <p className={`text-xs ${tone.text} opacity-75 mt-1 font-mono-num`}>
+                      {tone.label} · {alert.date}
+                    </p>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+        </section>
+
+        <section className="lg:col-span-5">
+          <h3 className="text-lg font-bold text-[#0f3d3e] mb-3 font-serif-elegant">
+            Activity Log (Jan – Early Nov)
+          </h3>
+          <Card className="border border-[#cce7e3] bg-white divide-y divide-[#eaf6f4] p-0 overflow-hidden">
+            {activityLog.map((item) => (
+              <div key={item.id} className="px-4 py-3 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-[#0f3d3e] truncate">{item.activity}</p>
+                  <p className="text-xs text-[#4b7476] font-mono-num">{item.date}</p>
                 </div>
-              </Card>
-            );
-          })}
-        </div>
-      </section>
+                <span className="text-xs font-semibold font-mono-num text-[#0f766e] shrink-0">
+                  {item.duration}
+                </span>
+              </div>
+            ))}
+          </Card>
+        </section>
+      </div>
+
+      {/* Literary Moment for Parents */}
+      <LiteratureClockCard compact />
     </div>
   );
 };

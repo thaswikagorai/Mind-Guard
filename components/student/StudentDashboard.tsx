@@ -13,6 +13,7 @@ import {
 import DailyAffirmationWidget from './DailyAffirmationWidget';
 import WeeklyGoalsCard from './WeeklyGoalsCard';
 import DeepBreathingGuide from './DeepBreathingGuide';
+import LiteratureClockCard from '../common/LiteratureClockCard';
 
 interface StudentDashboardProps {
   name: string;
@@ -207,6 +208,7 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ name, onNavigate, o
               onNavigateToJournal={() => onNavigate('journal')}
               onNavigateToWellness={() => onNavigate('wellness')}
             />
+            <LiteratureClockCard />
             <WeeklyGoalsCard
               key={goalsRefreshKey}
               onManageGoals={() => onNavigate('goals')}

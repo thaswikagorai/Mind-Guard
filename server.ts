@@ -39,6 +39,135 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  // Literature Clock endpoint (minute-matched quotes from real literature with title & author)
+  interface RawLitClockEntry {
+    time?: string;
+    quote_first?: string;
+    quote_time_case?: string;
+    quote_last?: string;
+    title?: string;
+    author?: string;
+    sfw?: string;
+  }
+
+  interface FormattedLitClockQuote {
+    time: string;
+    quoteFirst: string;
+    quoteTimeCase: string;
+    quoteLast: string;
+    title: string;
+    author: string;
+    isExactMinute: boolean;
+  }
+
+  const litClockCache = new Map<string, { quotes: FormattedLitClockQuote[]; cachedAt: number }>();
+  const LIT_CLOCK_TTL_MS = 12 * 60 * 60 * 1000;
+  const SENSITIVE_TEXT_REGEX = /\b(murder|corpse|dead body|suicide|kill|slaughter|execution|blood-soaked|hang himself)\b/i;
+
+  const cleanQuoteFragment = (str: unknown): string => {
+    if (typeof str !== 'string') return '';
+    return str.replace(/<br\s*\/?>/gi, ' ').replace(/\s+/g, ' ');
+  };
+
+  const fetchMinuteJson = async (
+    targetMinuteOfDay: number,
+    requestedMinuteOfDay: number
+  ): Promise<FormattedLitClockQuote[]> => {
+    const normalized = ((targetMinuteOfDay % 1440) + 1440) % 1440;
+    const hh = String(Math.floor(normalized / 60)).padStart(2, '0');
+    const mm = String(normalized % 60).padStart(2, '0');
+    const url = `https://raw.githubusercontent.com/JohsEnevoldsen/literature-clock/master/docs/times/${hh}_${mm}.json`;
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 4500);
+    try {
+      const resp = await fetch(url, { signal: controller.signal });
+      if (!resp.ok) return [];
+      const data = (await resp.json()) as RawLitClockEntry[];
+      if (!Array.isArray(data)) return [];
+
+      const sfwItems = data.filter(
+        (item) =>
+          item &&
+          item.sfw !== 'no' &&
+          typeof item.quote_time_case === 'string' &&
+          item.quote_time_case.trim().length > 0 &&
+          typeof item.title === 'string' &&
+          item.title.trim().length > 0 &&
+          typeof item.author === 'string' &&
+          item.author.trim().length > 0
+      );
+
+      // Prefer student-friendly passages ahead of dark crime/thriller excerpts
+      const cleanFirst = sfwItems.filter((item) => {
+        const full = `${item.quote_first ?? ''} ${item.quote_time_case ?? ''} ${item.quote_last ?? ''} ${item.title ?? ''}`;
+        return !SENSITIVE_TEXT_REGEX.test(full);
+      });
+      const prioritized = cleanFirst.length > 0 ? cleanFirst : sfwItems;
+
+      const isExactMinute = normalized === requestedMinuteOfDay;
+      return prioritized.slice(0, 10).map((item) => ({
+        time: `${hh}:${mm}`,
+        quoteFirst: cleanQuoteFragment(item.quote_first),
+        quoteTimeCase: cleanQuoteFragment(item.quote_time_case).trim(),
+        quoteLast: cleanQuoteFragment(item.quote_last),
+        title: cleanQuoteFragment(item.title).trim(),
+        author: cleanQuoteFragment(item.author).trim(),
+        isExactMinute,
+      }));
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
+  app.get('/api/literature-clock', async (req, res) => {
+    const rawHh = Number(req.query.hh);
+    const rawMm = Number(req.query.mm);
+
+    const now = new Date();
+    const hhNum = Number.isInteger(rawHh) && rawHh >= 0 && rawHh <= 23 ? rawHh : now.getHours();
+    const mmNum = Number.isInteger(rawMm) && rawMm >= 0 && rawMm <= 59 ? rawMm : now.getMinutes();
+
+    const hhPad = String(hhNum).padStart(2, '0');
+    const mmPad = String(mmNum).padStart(2, '0');
+    const key = `${hhPad}:${mmPad}`;
+
+    const cached = litClockCache.get(key);
+    if (cached && Date.now() - cached.cachedAt < LIT_CLOCK_TTL_MS) {
+      return res.json({
+        time: key,
+        quotes: cached.quotes,
+        source: 'literature-clock',
+      });
+    }
+
+    const baseMinute = hhNum * 60 + mmNum;
+    const offsets = [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5];
+
+    let quotes: FormattedLitClockQuote[] = [];
+    for (const offset of offsets) {
+      quotes = await fetchMinuteJson(baseMinute + offset, baseMinute);
+      if (quotes.length > 0) break;
+    }
+
+    if (quotes.length > 0) {
+      litClockCache.set(key, { quotes, cachedAt: Date.now() });
+      return res.json({
+        time: key,
+        quotes,
+        source: 'literature-clock',
+      });
+    }
+
+    return res.json({
+      time: key,
+      quotes: [],
+      source: 'classic-fallback',
+    });
+  });
+
   // Multi-signal Wellness & Stress Triage Engine (ephemeral single JPEG + local telemetry + reported symptoms)
   app.post('/api/stress-checkin/triage', async (req, res) => {
     const ai = getGeminiClient();

@@ -34,7 +34,7 @@ const ParentDashboard: React.FC<ParentDashboardProps> = ({ childsEmail, onLogout
               Parent Hub
             </h1>
             <p className="text-xs sm:text-sm text-[#4b7476] truncate">
-              Reviewing <span className="font-semibold text-[#0f766e]">{childsEmail}</span>
+              Reviewing <span className="font-semibold text-[#0f766e]">{childsEmail}</span> · Jan – Early Nov 2026
             </p>
           </div>
           <button
@@ -134,7 +134,7 @@ const AdviceSupport: React.FC<{ studentData: any; onOpenMentor: () => void }> = 
             Support Strategy
           </h2>
           <p className="text-xs sm:text-sm text-[#4b7476] mt-0.5">
-            Practical ways to encourage your child this week.
+            Practical encouragement tailored to your child&apos;s Jan – Early Nov wellness trends.
           </p>
         </div>
         <button
