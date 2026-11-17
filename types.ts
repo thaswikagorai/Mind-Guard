@@ -275,3 +275,22 @@ export interface LiteratureClockResponse {
   quotes: LiteratureClockQuote[];
   source: 'literature-clock' | 'classic-fallback';
 }
+
+export type CalendarMoodKey = 'happy' | 'calm' | 'tired' | 'stressed';
+
+export type MoodLogSource = 'calendar' | 'journal' | 'quiz' | 'checkin';
+
+export interface MoodLogEntry {
+  id: string;
+  dateKey: string; // YYYY-MM-DD local date
+  mood: CalendarMoodKey;
+  source: MoodLogSource;
+  note?: string;
+  timestamp: number;
+}
+
+export interface DailyMoodSummary {
+  dateKey: string;
+  primaryMood: CalendarMoodKey;
+  entries: MoodLogEntry[];
+}

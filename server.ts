@@ -1,14 +1,16 @@
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 const MODEL_NAME = 'gemini-4-hydrogen';
+const FAST_CHAT_MODEL = 'gemini-3.1-flash-lite';
 const TRIAGE_MODEL_NAME = 'gemini-2.5-flash';
+const CHAT_MODEL_CANDIDATES = [FAST_CHAT_MODEL, MODEL_NAME, TRIAGE_MODEL_NAME] as const;
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
@@ -18,11 +20,44 @@ function getGeminiClient(): GoogleGenAI | null {
   return new GoogleGenAI({
     apiKey,
     httpOptions: {
+      timeout: 20000,
       headers: {
         'User-Agent': 'aistudio-build',
       },
     },
   });
+}
+
+async function generateWithFallback(
+  ai: GoogleGenAI,
+  contents: string,
+  extraConfig: Record<string, unknown> = {},
+  timeoutMs = 7000
+) {
+  let lastErr: unknown = null;
+  for (const candidateModel of CHAT_MODEL_CANDIDATES) {
+    try {
+      const config: Record<string, unknown> = {
+        ...extraConfig,
+        abortSignal: AbortSignal.timeout(timeoutMs),
+      };
+      if (candidateModel === MODEL_NAME) {
+        config.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+      }
+      const response = await ai.models.generateContent({
+        model: candidateModel,
+        contents,
+        config,
+      });
+      if ((response.text ?? '').trim()) {
+        return response;
+      }
+    } catch (err) {
+      lastErr = err;
+      console.error(`Gemini generateWithFallback (${candidateModel}) failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+  throw lastErr ?? new Error('All Gemini models returned empty responses.');
 }
 
 async function startServer() {
@@ -597,10 +632,7 @@ Return JSON only matching the required schema.`,
       return res.json({ text: "Sorry, I couldn't generate a routine right now. Take a deep breath!" });
     }
     try {
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-      });
+      const response = await generateWithFallback(ai, prompt);
       return res.json({ text: response.text ?? '' });
     } catch {
       return res.json({ text: "Sorry, I couldn't generate a routine right now. Take a deep breath!" });
@@ -610,20 +642,30 @@ Return JSON only matching the required schema.`,
   // Mentor greeting
   app.post('/api/gemini/mentor-greeting', async (req, res) => {
     const ai = getGeminiClient();
-    const { role, context } = req.body ?? {};
+    const { role, context, userName } = req.body ?? {};
+    const cleanName = typeof userName === 'string' && userName.trim() ? userName.trim() : '';
     const fallback =
       role === 'student'
-        ? "Hi there! I'm Mindy. How can I help you feel your best today?"
+        ? cleanName
+          ? `Hi ${cleanName}! I'm Mindy. How are you feeling today?`
+          : "Hi there! I'm Mindy. How can I help you feel your best today?"
         : "Hello, I'm Dr. Aris. How can I assist you with your child's wellness journey?";
 
     if (!ai) return res.json({ text: fallback });
+
+    const nameInstruction = cleanName
+      ? `Address the ${role} warmly by their name: ${cleanName}.`
+      : 'Do NOT use any bracketed placeholders like [Student Name] or [Name].';
+    const prompt = `Generate a warm, supportive, concise greeting for a ${role} from ${
+      role === 'student' ? 'Mindy, an AI wellness mentor' : 'Dr. Aris, a family advisor'
+    }. ${nameInstruction} Context: ${typeof context === 'string' ? context : 'Starting a check-in'}. Keep it under 2 sentences and end with a gentle question.`;
+
     try {
-      const prompt = `Generate a warm, professional, and personalized greeting for a ${role}. Context: ${context}. Keep it under 2 sentences and end with a supportive question.`;
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-      });
-      return res.json({ text: (response.text ?? fallback).trim() });
+      const response = await generateWithFallback(ai, prompt, {}, 4500);
+      const text = (response.text ?? '')
+        .replace(/\[(?:Student|Parent|User)?\s*Name\]/gi, cleanName || 'friend')
+        .trim();
+      return res.json({ text: text || fallback });
     } catch {
       return res.json({ text: fallback });
     }
@@ -638,30 +680,43 @@ Return JSON only matching the required schema.`,
     try {
       const history = Array.isArray(req.body?.history) ? req.body.history : [];
       const lastMessages = history
+        .filter((m: { text?: unknown }) => typeof m?.text === 'string' && m.text.trim().length > 0)
         .slice(-3)
         .map((m: { role: string; text: string }) => `${m.role}: ${m.text}`)
         .join('\n');
-      const prompt = `Based on the conversation history below, generate exactly 3 short (max 5 words) follow-up suggestions.
+      const prompt = `Based on the conversation history below, generate exactly 3 short (max 5 words) follow-up suggestions for the user to tap.
 Ensure variety:
 - One for venting/emotion (e.g., "I'm still feeling low")
 - One for action/tips (e.g., "Give me a study hack")
-- One for data/explanation (e.g., "Why do I feel this way?")
+- One for reflection/explanation (e.g., "Why do I feel this way?")
 
-Return as a JSON array of strings.
-History: ${lastMessages}`;
+Return as a JSON array of 3 strings.
+History: ${lastMessages || 'Greeting only'}`;
 
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-        config: {
+      const response = await generateWithFallback(
+        ai,
+        prompt,
+        {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
           },
         },
-      });
-      return res.json({ replies: JSON.parse((response.text ?? '[]').trim()) });
+        4500
+      );
+      const raw = (response.text ?? '[]')
+        .trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/, '');
+      const parsed = JSON.parse(raw);
+      const cleaned = Array.isArray(parsed)
+        ? parsed
+            .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+            .map((item) => item.trim())
+            .slice(0, 3)
+        : [];
+      return res.json({ replies: cleaned.length > 0 ? cleaned : fallback });
     } catch {
       return res.json({ replies: fallback });
     }
@@ -673,10 +728,10 @@ History: ${lastMessages}`;
     const fallback = 'You are doing your best, and that is enough. ✨';
     if (!ai) return res.json({ text: fallback });
     try {
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: 'Generate a single, unique, and deeply encouraging sentence to inspire a student.',
-      });
+      const response = await generateWithFallback(
+        ai,
+        'Generate a single, unique, and deeply encouraging sentence to inspire a student.'
+      );
       return res.json({ text: (response.text ?? fallback).trim() });
     } catch {
       return res.json({ text: fallback });
@@ -712,21 +767,17 @@ Requirements:
 
 Return as valid JSON object matching the schema.`;
 
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              quote: { type: Type.STRING },
-              author: { type: Type.STRING },
-              reflectionPrompt: { type: Type.STRING },
-              themeLabel: { type: Type.STRING },
-            },
-            required: ['quote', 'author', 'reflectionPrompt', 'themeLabel'],
+      const response = await generateWithFallback(ai, prompt, {
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            quote: { type: Type.STRING },
+            author: { type: Type.STRING },
+            reflectionPrompt: { type: Type.STRING },
+            themeLabel: { type: Type.STRING },
           },
+          required: ['quote', 'author', 'reflectionPrompt', 'themeLabel'],
         },
       });
       return res.json(JSON.parse((response.text ?? '{}').trim()));
@@ -743,10 +794,10 @@ Return as valid JSON object matching the schema.`;
 
     try {
       const stressData = req.body?.stressData ?? [];
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: `Based on child stress data: ${JSON.stringify(stressData)}, provide 3 empathetic tips for a parent. Return JSON array with title, content, icon.`,
-        config: {
+      const response = await generateWithFallback(
+        ai,
+        `Based on child stress data: ${JSON.stringify(stressData)}, provide 3 empathetic tips for a parent. Return JSON array with title, content, icon.`,
+        {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.ARRAY,
@@ -760,8 +811,8 @@ Return as valid JSON object matching the schema.`;
               required: ['title', 'content', 'icon'],
             },
           },
-        },
-      });
+        }
+      );
       return res.json({ advice: JSON.parse((response.text ?? '[]').trim()) });
     } catch {
       return res.json({ advice: fallback });
@@ -776,10 +827,10 @@ Return as valid JSON object matching the schema.`;
 
     try {
       const text = typeof req.body?.text === 'string' ? req.body.text : '';
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: `Analyze sentiment and themes in JSON: "${text}"`,
-        config: {
+      const response = await generateWithFallback(
+        ai,
+        `Analyze sentiment and themes in JSON: "${text}"`,
+        {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.OBJECT,
@@ -789,8 +840,8 @@ Return as valid JSON object matching the schema.`;
             },
             required: ['sentiment', 'themes'],
           },
-        },
-      });
+        }
+      );
       return res.json(JSON.parse((response.text ?? '{}').trim()));
     } catch {
       return res.json(fallback);
@@ -804,10 +855,10 @@ Return as valid JSON object matching the schema.`;
     if (!ai) return res.json({ text: fallback });
     try {
       const data = req.body?.data ?? [];
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: `Analyze child stress data and give a 2-sentence summary for a parent: ${JSON.stringify(data)}`,
-      });
+      const response = await generateWithFallback(
+        ai,
+        `Analyze child stress data and give a 2-sentence summary for a parent: ${JSON.stringify(data)}`
+      );
       return res.json({ text: response.text ?? fallback });
     } catch {
       return res.json({ text: fallback });
@@ -825,17 +876,17 @@ Return as valid JSON object matching the schema.`;
     if (!ai) return res.json({ steps: fallback });
     try {
       const { stressData = [], activities = [] } = req.body ?? {};
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: `Generate 3 practical action steps for a parent in JSON array format based on: Stress: ${JSON.stringify(stressData)}, Activities: ${Array.isArray(activities) ? activities.join(', ') : ''}`,
-        config: {
+      const response = await generateWithFallback(
+        ai,
+        `Generate 3 practical action steps for a parent in JSON array format based on: Stress: ${JSON.stringify(stressData)}, Activities: ${Array.isArray(activities) ? activities.join(', ') : ''}`,
+        {
           responseMimeType: 'application/json',
           responseSchema: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
           },
-        },
-      });
+        }
+      );
       return res.json({ steps: JSON.parse((response.text ?? '[]').trim()) });
     } catch {
       return res.json({ steps: fallback });
@@ -848,10 +899,10 @@ Return as valid JSON object matching the schema.`;
     if (!ai) return res.json({ category: 'Relax' });
     try {
       const feeling = typeof req.body?.feeling === 'string' ? req.body.feeling : '';
-      const response = await ai.models.generateContent({
-        model: MODEL_NAME,
-        contents: `Based on: "${feeling}", recommend 'Relax', 'Focus', 'Sleep', or 'Happy'. One word only.`,
-      });
+      const response = await generateWithFallback(
+        ai,
+        `Based on: "${feeling}", recommend 'Relax', 'Focus', 'Sleep', or 'Happy'. One word only.`
+      );
       return res.json({ category: (response.text ?? 'Relax').trim() });
     } catch {
       return res.json({ category: 'Relax' });
@@ -862,48 +913,215 @@ Return as valid JSON object matching the schema.`;
   app.post('/api/gemini/mentor-chat', async (req, res) => {
     const ai = getGeminiClient();
     if (!ai) {
-      return res.status(503).json({ error: 'Mentor chat unavailable: GEMINI_API_KEY not set.' });
+      return res.status(503).json({
+        error: 'Mindy is unavailable right now: Gemini API key is not configured in Settings > Secrets.',
+      });
     }
 
     const { systemInstruction, history = [], message } = req.body ?? {};
-    if (typeof message !== 'string' || !message.trim()) {
+    const trimmedMessage = typeof message === 'string' ? message.trim() : '';
+    if (!trimmedMessage) {
       return res.status(400).json({ error: 'Message is required.' });
     }
 
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    const safeSystemInstruction =
+      typeof systemInstruction === 'string' && systemInstruction.trim().length > 0
+        ? systemInstruction.trim()
+        : undefined;
+
+    // Normalize multi-turn history for Gemini:
+    // 1. Keep only valid non-empty user/model entries.
+    // 2. Drop leading 'model' messages (e.g., initial greeting) so contents always starts with 'user'.
+    // 3. Merge consecutive same-role messages so roles strictly alternate user -> model -> user.
+    const rawTurns = Array.isArray(history)
+      ? history.filter(
+          (m: { role?: unknown; text?: unknown; isError?: unknown }) =>
+            !m?.isError &&
+            typeof m?.text === 'string' &&
+            m.text.trim().length > 0 &&
+            (m.role === 'user' || m.role === 'model')
+        )
+      : [];
+
+    const normalizedContents: { role: 'user' | 'model'; parts: { text: string }[] }[] = [];
+    for (const turn of rawTurns) {
+      const role = turn.role as 'user' | 'model';
+      const text = (turn.text as string).trim();
+      if (normalizedContents.length === 0 && role !== 'user') {
+        // Skip leading model greeting — Gemini requires first turn to be 'user'
+        continue;
+      }
+      const prev = normalizedContents[normalizedContents.length - 1];
+      if (prev && prev.role === role) {
+        prev.parts[0].text += `\n\n${text}`;
+      } else {
+        normalizedContents.push({ role, parts: [{ text }] });
+      }
+    }
+
+    const lastTurn = normalizedContents[normalizedContents.length - 1];
+    if (lastTurn && lastTurn.role === 'user') {
+      lastTurn.parts[0].text += `\n\n${trimmedMessage}`;
+    } else {
+      normalizedContents.push({ role: 'user', parts: [{ text: trimmedMessage }] });
+    }
+
+    const formatGeminiError = (err: unknown): string => {
+      const raw = err instanceof Error ? err.message : String(err ?? '');
+      const lower = raw.toLowerCase();
+      if (lower.includes('429') || lower.includes('resource_exhausted') || lower.includes('quota')) {
+        return 'Hit a Gemini API rate or quota limit (429). Please wait a moment and try again, or check billing in Settings > Secrets.';
+      }
+      if (
+        lower.includes('403') ||
+        lower.includes('permission_denied') ||
+        lower.includes('api_key_invalid') ||
+        lower.includes('api key not valid')
+      ) {
+        return 'Cannot connect right now because the Gemini API key is invalid or lacks permission. Please check Settings > Secrets.';
+      }
+      if (lower.includes('404') || lower.includes('not_found')) {
+        return 'The selected AI model is currently unavailable. Please try again.';
+      }
+      if (lower.includes('abort') || lower.includes('timeout')) {
+        return 'The response took longer than expected. Please tap Retry message to try again.';
+      }
+      return 'Connection flickered. Please try again.';
+    };
+
+    let clientClosed = false;
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        clientClosed = true;
+      }
+    });
 
     try {
-      const contents = [
-        ...history
-          .filter((m: { role?: string; text?: string }) => m.text && (m.role === 'user' || m.role === 'model'))
-          .map((m: { role: string; text: string }) => ({
-            role: m.role,
-            parts: [{ text: m.text }],
-          })),
-        { role: 'user', parts: [{ text: message }] },
-      ];
+      let emittedChars = 0;
+      let lastError: unknown = null;
 
-      const stream = await ai.models.generateContentStream({
-        model: MODEL_NAME,
-        contents,
-        config: {
-          systemInstruction: typeof systemInstruction === 'string' ? systemInstruction : undefined,
-        },
-      });
+      for (const candidateModel of CHAT_MODEL_CANDIDATES) {
+        if (emittedChars > 0 || clientClosed) break;
 
-      for await (const chunk of stream) {
-        if (chunk.text) {
-          res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+        const attemptController = new AbortController();
+        const firstChunkTimer = setTimeout(() => {
+          attemptController.abort(new Error(`Timeout waiting for ${candidateModel} response`));
+        }, 9000);
+
+        const buildModelConfig = () => {
+          const cfg: Record<string, unknown> = {
+            abortSignal: attemptController.signal,
+          };
+          if (safeSystemInstruction) {
+            cfg.systemInstruction = safeSystemInstruction;
+          }
+          if (candidateModel === MODEL_NAME) {
+            cfg.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+          }
+          return cfg;
+        };
+
+        try {
+          const stream = await ai.models.generateContentStream({
+            model: candidateModel,
+            contents: normalizedContents,
+            config: buildModelConfig(),
+          });
+
+          for await (const chunk of stream) {
+            if (clientClosed) break;
+            if (chunk.text) {
+              if (emittedChars === 0) {
+                clearTimeout(firstChunkTimer);
+              }
+              emittedChars += chunk.text.length;
+              res.write(`data: ${JSON.stringify({ text: chunk.text })}\n\n`);
+            }
+          }
+          clearTimeout(firstChunkTimer);
+          if (emittedChars > 0) break;
+        } catch (streamErr) {
+          clearTimeout(firstChunkTimer);
+          lastError = streamErr;
+          const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
+          console.error(`Mentor chat stream attempt (${candidateModel}) failed:`, errMsg);
+
+          const lower = errMsg.toLowerCase();
+          const isAuthError =
+            lower.includes('403') ||
+            lower.includes('permission_denied') ||
+            lower.includes('api_key_invalid') ||
+            lower.includes('api key not valid');
+
+          if (isAuthError) {
+            throw streamErr;
+          }
+
+          // If streaming failed cleanly (not timeout/quota/missing) before emitting chunks, try non-streaming once on this model
+          const isSkipFallback =
+            lower.includes('429') ||
+            lower.includes('resource_exhausted') ||
+            lower.includes('quota') ||
+            lower.includes('404') ||
+            lower.includes('not_found') ||
+            lower.includes('timeout') ||
+            lower.includes('abort');
+
+          if (emittedChars === 0 && !isSkipFallback && !clientClosed) {
+            try {
+              const fallbackConfig: Record<string, unknown> = {
+                abortSignal: AbortSignal.timeout(8000),
+              };
+              if (safeSystemInstruction) fallbackConfig.systemInstruction = safeSystemInstruction;
+              if (candidateModel === MODEL_NAME) {
+                fallbackConfig.thinkingConfig = { thinkingLevel: ThinkingLevel.LOW };
+              }
+              const singleResp = await ai.models.generateContent({
+                model: candidateModel,
+                contents: normalizedContents,
+                config: fallbackConfig,
+              });
+              const fullText = (singleResp.text ?? '').trim();
+              if (fullText) {
+                emittedChars += fullText.length;
+                res.write(`data: ${JSON.stringify({ text: fullText })}\n\n`);
+                break;
+              }
+            } catch (singleErr) {
+              lastError = singleErr;
+            }
+          }
         }
       }
-      res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+
+      if (clientClosed) {
+        if (!res.writableEnded) res.end();
+        return;
+      }
+
+      if (emittedChars === 0) {
+        if (lastError) {
+          throw lastError;
+        }
+        res.write(
+          `data: ${JSON.stringify({ error: 'Returned an empty response. Please try again.' })}\n\n`
+        );
+      } else {
+        res.write(`data: ${JSON.stringify({ done: true })}\n\n`);
+      }
       res.end();
     } catch (error) {
-      console.error('Mentor chat stream error:', error instanceof Error ? error.message : 'Unknown error');
-      res.write(`data: ${JSON.stringify({ error: 'Connection flickered. Please try again.' })}\n\n`);
-      res.end();
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      console.error('Mentor chat final error:', msg);
+      if (!res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ error: formatGeminiError(error) })}\n\n`);
+        res.end();
+      }
     }
   });
 

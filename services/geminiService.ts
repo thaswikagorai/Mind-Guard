@@ -54,18 +54,53 @@ export const analyzeStressCheckInFrame = async (
 
 export const streamMentorChat = async (
   systemInstruction: string,
-  history: { role: 'user' | 'model'; text: string }[],
+  history: { role: 'user' | 'model'; text: string; isError?: boolean }[],
   message: string,
   onChunk: (partialText: string) => void
 ): Promise<string> => {
-  const response = await fetch('/api/gemini/mentor-chat', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ systemInstruction, history, message }),
-  });
+  const controller = new AbortController();
+  let timeoutId: number | undefined;
+  const resetWatchdog = (ms: number) => {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    timeoutId = window.setTimeout(() => {
+      controller.abort();
+    }, ms);
+  };
+
+  resetWatchdog(22000);
+
+  let response: Response;
+  try {
+    response = await fetch('/api/gemini/mentor-chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
+      body: JSON.stringify({
+        systemInstruction,
+        history: history.filter((m) => !m.isError && m.text.trim().length > 0),
+        message,
+      }),
+    });
+  } catch (fetchErr) {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    if (controller.signal.aborted) {
+      throw new Error('The mentor response timed out. Please tap Retry message.');
+    }
+    throw fetchErr;
+  }
 
   if (!response.ok || !response.body) {
-    throw new Error('Failed to reach mentor chat service.');
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    let errMsg = 'Failed to reach mentor chat service.';
+    try {
+      const errData = await response.json();
+      if (typeof errData?.error === 'string' && errData.error.trim()) {
+        errMsg = errData.error;
+      }
+    } catch {
+      // ignore non-JSON error body
+    }
+    throw new Error(errMsg);
   }
 
   const reader = response.body.getReader();
@@ -73,34 +108,65 @@ export const streamMentorChat = async (
   let accumulated = '';
   let buffer = '';
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-
-    const events = buffer.split('\n\n');
-    buffer = events.pop() || '';
-
-    for (const evt of events) {
-      const line = evt.trim();
+  const processEventBlock = (block: string) => {
+    const lines = block.split(/\r?\n/);
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
       if (!line.startsWith('data:')) continue;
       const jsonStr = line.slice(5).trim();
-      if (!jsonStr) continue;
+      if (!jsonStr || jsonStr === '[DONE]') continue;
+      let parsed: { error?: string; text?: string; done?: boolean } | null = null;
       try {
-        const parsed = JSON.parse(jsonStr);
-        if (parsed.error) {
-          throw new Error(parsed.error);
-        }
-        if (parsed.text) {
-          accumulated += parsed.text;
-          onChunk(accumulated);
-        }
-      } catch (e) {
-        if (e instanceof Error && e.message !== 'Unexpected end of JSON input') {
-          throw e;
-        }
+        parsed = JSON.parse(jsonStr);
+      } catch {
+        continue;
+      }
+      if (parsed?.error) {
+        throw new Error(parsed.error);
+      }
+      if (parsed?.text) {
+        accumulated += parsed.text;
+        onChunk(accumulated);
       }
     }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      resetWatchdog(15000);
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+      } else if (done) {
+        buffer += decoder.decode();
+      }
+
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = done ? '' : (events.pop() || '');
+
+      for (const evt of events) {
+        if (evt.trim()) {
+          processEventBlock(evt);
+        }
+      }
+
+      if (done) break;
+    }
+
+    if (buffer.trim()) {
+      processEventBlock(buffer);
+    }
+  } catch (streamErr) {
+    if (controller.signal.aborted) {
+      throw new Error('The mentor response timed out. Please tap Retry message.');
+    }
+    throw streamErr;
+  } finally {
+    if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+  }
+
+  if (!accumulated.trim()) {
+    throw new Error('Did not receive a reply. Please try again.');
   }
 
   return accumulated;
@@ -155,35 +221,53 @@ Combine deep breathing with a focus word like "Peace" or "Calm".`;
   }
 };
 
-export const getMentorGreeting = async (role: 'student' | 'parent', context: string): Promise<string> => {
+export const getMentorGreeting = async (
+  role: 'student' | 'parent',
+  context: string,
+  userName?: string
+): Promise<string> => {
+  const cleanName = userName?.trim() || '';
   const fallback =
     role === 'student'
-      ? "Hi there! I'm Mindy. How can I help you feel your best today?"
+      ? cleanName
+        ? `Hi ${cleanName}! I'm Mindy. How can I help you feel your best today?`
+        : "Hi there! I'm Mindy. How can I help you feel your best today?"
       : "Hello, I'm Dr. Aris. How can I assist you with your child's wellness journey?";
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 5000);
   try {
     const response = await fetch('/api/gemini/mentor-greeting', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role, context }),
+      signal: controller.signal,
+      body: JSON.stringify({ role, context, userName: cleanName }),
     });
     const data = await response.json();
     return data.text || fallback;
   } catch {
     return fallback;
+  } finally {
+    window.clearTimeout(timer);
   }
 };
 
 export const generateQuickReplies = async (history: { role: string; text: string }[]): Promise<string[]> => {
+  const fallback = ["Tell me more", "I need a break", "Help me plan"];
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(), 6000);
   try {
     const response = await fetch('/api/gemini/quick-replies', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
+      signal: controller.signal,
       body: JSON.stringify({ history }),
     });
     const data = await response.json();
-    return Array.isArray(data.replies) ? data.replies : ["Tell me more", "I need a break", "Help me plan"];
+    return Array.isArray(data.replies) ? data.replies : fallback;
   } catch {
-    return ["Tell me more", "I need a break", "Help me plan"];
+    return fallback;
+  } finally {
+    window.clearTimeout(timer);
   }
 };
 

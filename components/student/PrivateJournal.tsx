@@ -3,6 +3,7 @@ import { JournalEntry, Mood } from '../../types';
 import { analyzeJournalEntry } from '../../services/geminiService';
 import { ChevronLeftIcon, KeyIcon, PlusIcon, TrashIcon } from '../icons';
 import Card from '../common/Card';
+import { MOOD_UPDATED_EVENT } from '../../services/moodCalendarService';
 
 interface PrivateJournalProps {
   onBack: () => void;
@@ -91,6 +92,7 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
     const updatedEntries = [newEntry, ...entries];
     setEntries(updatedEntries);
     localStorage.setItem('mindguard_journal_entries', JSON.stringify(updatedEntries));
+    window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
     setIsSaving(false);
     setNewEntryContent('');
     setView('list');
@@ -100,6 +102,7 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
     const updatedEntries = entries.filter((entry) => entry.id !== id);
     setEntries(updatedEntries);
     localStorage.setItem('mindguard_journal_entries', JSON.stringify(updatedEntries));
+    window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
   };
 
   const sentimentTone = (sentiment: string) => {

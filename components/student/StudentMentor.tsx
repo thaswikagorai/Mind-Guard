@@ -1,43 +1,81 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ChevronLeftIcon, SendIcon, SparklesIcon, LeafIcon } from '../icons';
+import { ChevronLeftIcon, SendIcon, SparklesIcon, LeafIcon, RefreshIcon } from '../icons';
 import { generateQuickReplies, getMentorGreeting, streamMentorChat } from '../../services/geminiService';
 
 interface Message {
   role: 'user' | 'model';
   text: string;
+  isError?: boolean;
+  retryPrompt?: string;
 }
 
 interface StudentMentorProps {
   onBack: () => void;
 }
 
-const STUDENT_MENTOR_SYSTEM_INSTRUCTION = `You are Mindy, a deeply empathetic and intelligent academic wellness mentor. 
-Context: You are talking to a student. Validate their emotions first. Be concise. Use emojis. 
-If they need a grounding exercise, lead them through it step-by-step.`;
+const formatMentorText = (text: string): React.ReactNode => {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => {
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={index} className="font-semibold">
+          {part.slice(2, -2)}
+        </strong>
+      );
+    }
+    return <React.Fragment key={index}>{part}</React.Fragment>;
+  });
+};
 
 const StudentMentor: React.FC<StudentMentorProps> = ({ onBack }) => {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const initialStudentName = localStorage.getItem('mindguard_user_name') || '';
+  const initialGreeting = initialStudentName
+    ? `Hi ${initialStudentName}! I'm Mindy. How are you feeling today?`
+    : "Hi there! I'm Mindy. How can I help you feel your best today?";
+
+  const [messages, setMessages] = useState<Message[]>([
+    { role: 'model', text: initialGreeting },
+  ]);
+  const [suggestions, setSuggestions] = useState<string[]>([
+    "I'm feeling stressed",
+    'Give me a study tip',
+    'Help me unwind',
+  ]);
   const [inputValue, setInputValue] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [status, setStatus] = useState('Connecting...');
+  const [status, setStatus] = useState('Online');
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isSendingRef = useRef(false);
 
   useEffect(() => {
+    let active = true;
+
     const initChat = async () => {
+      const studentName = localStorage.getItem('mindguard_user_name') || '';
       const lastEntry = localStorage.getItem('mindguard_journal_entries');
-      const context = lastEntry
-        ? 'Student recently journaled about their feelings.'
-        : 'Student is starting their wellness journey.';
-      const greeting = await getMentorGreeting('student', context);
+      const latestStress = localStorage.getItem('mindguard_latest_stress_score');
+
+      const contextParts: string[] = [];
+      if (lastEntry) contextParts.push('Student recently wrote in their journal.');
+      if (latestStress) contextParts.push(`Latest stress check-in score is ${latestStress}/100.`);
+      if (contextParts.length === 0) contextParts.push('Student is opening a wellness check-in chat.');
+
+      const greeting = await getMentorGreeting('student', contextParts.join(' '), studentName);
+      if (!active) return;
 
       const welcomeMsg: Message = { role: 'model', text: greeting };
-      setMessages([welcomeMsg]);
+      setMessages((prev) => {
+        if (prev.some((m) => m.role === 'user')) return prev;
+        return [welcomeMsg];
+      });
       setStatus('Online');
       updateSuggestions([welcomeMsg]);
     };
 
     initChat();
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -47,7 +85,8 @@ const StudentMentor: React.FC<StudentMentorProps> = ({ onBack }) => {
   }, [messages, isTyping]);
 
   const updateSuggestions = async (history: Message[]) => {
-    const newSuggestions = await generateQuickReplies(history);
+    const cleanHistory = history.filter((m) => !m.isError && m.text.trim().length > 0);
+    const newSuggestions = await generateQuickReplies(cleanHistory);
     setSuggestions(newSuggestions);
   };
 
@@ -55,50 +94,85 @@ const StudentMentor: React.FC<StudentMentorProps> = ({ onBack }) => {
     handleSendMessage("I'm feeling a bit overwhelmed. Can we do a quick grounding exercise?");
   };
 
-  const handleSendMessage = async (textOverride?: string) => {
-    const userMessage = textOverride || inputValue.trim();
-    if (!userMessage || isTyping) return;
+  const handleSendMessage = async (textOverride?: string, isRetry = false) => {
+    const userMessage = (textOverride ?? inputValue).trim();
+    if (!userMessage || isTyping || isSendingRef.current) return;
+    isSendingRef.current = true;
 
-    const historyBeforeSend = [...messages];
-    setMessages((prev) => [...prev, { role: 'user', text: userMessage }, { role: 'model', text: '' }]);
-    setInputValue('');
+    const cleanHistory = messages.filter((m) => !m.isError && m.text.trim().length > 0);
+
+    // If retrying a failed turn, remove the trailing error bubble and avoid duplicating the user message
+    const baseMessages = isRetry
+      ? messages.filter((m, idx) => !(idx === messages.length - 1 && m.isError))
+      : [...messages, { role: 'user' as const, text: userMessage }];
+
+    const historyForModel = isRetry
+      ? cleanHistory.slice(0, cleanHistory[cleanHistory.length - 1]?.role === 'user' ? -1 : cleanHistory.length)
+      : cleanHistory;
+
+    setMessages([...baseMessages, { role: 'model', text: '' }]);
+    if (!textOverride) setInputValue('');
     setSuggestions([]);
     setIsTyping(true);
     setStatus('Thinking...');
 
+    const studentName = localStorage.getItem('mindguard_user_name') || '';
+    const latestStress = localStorage.getItem('mindguard_latest_stress_score');
+    const systemInstruction = `You are Mindy, a deeply empathetic and intelligent academic wellness mentor talking to a student${
+      studentName ? ` named ${studentName}` : ''
+    }.${
+      latestStress ? ` Their latest wellness check-in score was ${latestStress}/100.` : ''
+    } Validate their emotions first, keep responses concise and easy to read with line breaks when helpful, and use warm emojis sparingly. If they ask for a grounding exercise, guide them clearly step-by-step.`;
+
     try {
       const modelText = await streamMentorChat(
-        STUDENT_MENTOR_SYSTEM_INSTRUCTION,
-        historyBeforeSend,
+        systemInstruction,
+        historyForModel,
         userMessage,
         (partialText) => {
           setMessages((prev) => {
             const last = prev[prev.length - 1];
-            if (last?.role === 'model') return [...prev.slice(0, -1), { ...last, text: partialText }];
+            if (last?.role === 'model') {
+              return [...prev.slice(0, -1), { ...last, text: partialText, isError: false }];
+            }
             return prev;
           });
         }
       );
       setStatus('Online');
       updateSuggestions([
-        ...historyBeforeSend,
+        ...historyForModel,
         { role: 'user', text: userMessage },
         { role: 'model', text: modelText },
       ]);
-    } catch {
+    } catch (err) {
+      const errMessage =
+        err instanceof Error && err.message.trim()
+          ? err.message.trim()
+          : "I'm here for you, but my connection flickered. Let's try again?";
+
       setMessages((prev) => {
         const last = prev[prev.length - 1];
-        const fallback = "I'm here for you, but my connection flickered. Let's try again? 💙";
+        const errorBubble: Message = {
+          role: 'model',
+          text: errMessage,
+          isError: true,
+          retryPrompt: userMessage,
+        };
         if (last?.role === 'model' && last.text === '') {
-          return [...prev.slice(0, -1), { role: 'model', text: fallback }];
+          return [...prev.slice(0, -1), errorBubble];
         }
-        return [...prev, { role: 'model', text: fallback }];
+        return [...prev, errorBubble];
       });
       setStatus('Online');
     } finally {
+      isSendingRef.current = false;
       setIsTyping(false);
     }
   };
+
+  const showTypingIndicator =
+    isTyping && messages.length > 0 && messages[messages.length - 1]?.role === 'model' && messages[messages.length - 1]?.text === '';
 
   return (
     <div className="h-full flex flex-col bg-gradient-to-b from-[#eefaf7] via-[#f4fbff] to-[#eef2ff] relative overflow-hidden">
@@ -127,7 +201,8 @@ const StudentMentor: React.FC<StudentMentorProps> = ({ onBack }) => {
         <button
           type="button"
           onClick={handleGrounding}
-          className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#d1fae5] to-[#e0f2fe] text-[#0f3d3e] hover:brightness-95 transition-all border border-[#a7f3d0] text-xs font-semibold whitespace-nowrap shrink-0 min-h-[40px]"
+          disabled={isTyping}
+          className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-[#d1fae5] to-[#e0f2fe] text-[#0f3d3e] hover:brightness-95 disabled:opacity-50 transition-all border border-[#a7f3d0] text-xs font-semibold whitespace-nowrap shrink-0 min-h-[44px]"
         >
           <LeafIcon className="w-3.5 h-3.5 text-[#059669]" />
           <span>Quick Calm</span>
@@ -135,24 +210,42 @@ const StudentMentor: React.FC<StudentMentorProps> = ({ onBack }) => {
       </header>
 
       <div ref={scrollRef} className="flex-grow overflow-y-auto p-4 sm:p-6 space-y-4 no-scrollbar max-w-3xl mx-auto w-full">
-        {messages.map((msg, i) => (
-          <div
-            key={i}
-            className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-          >
+        {messages.map((msg, i) => {
+          if (msg.role === 'model' && msg.text === '' && isTyping && i === messages.length - 1) {
+            return null;
+          }
+          return (
             <div
-              className={`max-w-[85%] px-4 py-3.5 rounded-2xl text-sm leading-relaxed ${
-                msg.role === 'user'
-                  ? 'bg-gradient-to-r from-[#0d9488] to-[#0891b2] text-white rounded-br-xs shadow-xs'
-                  : 'bg-white text-[#0f3d3e] rounded-bl-xs border border-[#bde6de]'
-              }`}
+              key={i}
+              className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
             >
-              {msg.text}
+              <div
+                className={`max-w-[85%] px-4 py-3.5 rounded-2xl text-sm leading-relaxed whitespace-pre-wrap ${
+                  msg.role === 'user'
+                    ? 'bg-gradient-to-r from-[#0d9488] to-[#0891b2] text-white rounded-br-xs shadow-xs'
+                    : msg.isError
+                      ? 'bg-[#fff7ed] text-[#9a3412] rounded-bl-xs border border-[#fed7aa]'
+                      : 'bg-white text-[#0f3d3e] rounded-bl-xs border border-[#bde6de]'
+                }`}
+              >
+                <div>{formatMentorText(msg.text)}</div>
+                {msg.isError && msg.retryPrompt && (
+                  <button
+                    type="button"
+                    onClick={() => handleSendMessage(msg.retryPrompt, true)}
+                    disabled={isTyping}
+                    className="mt-2.5 inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-white text-[#0f3d3e] border border-[#fed7aa] hover:bg-[#ffedd5] text-xs font-semibold transition-colors min-h-[36px]"
+                  >
+                    <RefreshIcon className="w-3.5 h-3.5" />
+                    <span>Retry message</span>
+                  </button>
+                )}
+              </div>
             </div>
-          </div>
-        ))}
-        {isTyping && messages[messages.length - 1]?.text === '' && (
-          <div className="flex justify-start">
+          );
+        })}
+        {showTypingIndicator && (
+          <div className="flex justify-start" aria-label="Mindy is typing">
             <div className="bg-white border border-[#cce7e3] px-4 py-3.5 rounded-2xl flex items-center space-x-1.5">
               <div className="w-1.5 h-1.5 bg-[#99d8cf] rounded-full animate-bounce" />
               <div className="w-1.5 h-1.5 bg-[#2dd4bf] rounded-full animate-bounce [animation-delay:200ms]" />
@@ -162,21 +255,23 @@ const StudentMentor: React.FC<StudentMentorProps> = ({ onBack }) => {
         )}
       </div>
 
-      <div className="max-w-3xl mx-auto w-full px-4 sm:px-6 pb-2.5">
-        <div className="flex space-x-2 overflow-x-auto no-scrollbar py-1">
-          {suggestions.map((s, idx) => (
-            <button
-              type="button"
-              key={idx}
-              onClick={() => handleSendMessage(s)}
-              disabled={isTyping}
-              className="flex-shrink-0 px-3.5 py-2 bg-white text-[#0f3d3e] text-xs font-semibold rounded-xl border border-[#cce7e3] hover:bg-[#eaf6f4] transition-colors whitespace-nowrap min-h-[38px]"
-            >
-              {s}
-            </button>
-          ))}
+      {suggestions.length > 0 && (
+        <div className="max-w-3xl mx-auto w-full px-4 sm:px-6 pb-2.5">
+          <div className="flex space-x-2 overflow-x-auto no-scrollbar py-1">
+            {suggestions.map((s, idx) => (
+              <button
+                type="button"
+                key={idx}
+                onClick={() => handleSendMessage(s)}
+                disabled={isTyping}
+                className="flex-shrink-0 px-3.5 py-2 bg-white text-[#0f3d3e] text-xs font-semibold rounded-xl border border-[#cce7e3] hover:bg-[#eaf6f4] disabled:opacity-50 transition-colors whitespace-nowrap min-h-[44px]"
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="p-4 bg-white border-t border-[#cce7e3]">
         <div className="max-w-3xl mx-auto flex items-center space-x-2.5">

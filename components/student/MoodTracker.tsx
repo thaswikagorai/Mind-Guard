@@ -3,6 +3,7 @@ import { PERCEIVED_STRESS_SCALE_QUESTIONS, BERKELEY_STRESS_ANXIETY_QUESTIONS } f
 import { ChevronLeftIcon, SparklesIcon } from '../icons';
 import { analyzeJournalEntry } from '../../services/geminiService';
 import { Mood, JournalEntry, BerkeleyQuizResult } from '../../types';
+import { MOOD_UPDATED_EVENT, recordAutoMoodFromScore } from '../../services/moodCalendarService';
 
 interface MoodTrackerProps {
   onComplete: () => void;
@@ -119,6 +120,7 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
       const previous = JSON.parse(localStorage.getItem('mindguard_berkeley_quiz_results') || '[]');
       localStorage.setItem('mindguard_berkeley_quiz_results', JSON.stringify([resultData, ...previous]));
       localStorage.setItem('mindguard_latest_stress_score', resultData.normalizedPercentage.toString());
+      window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
     } catch {
       // ignore
     }
@@ -144,7 +146,9 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
     setJournalContent(`Today my Perceived Stress quiz result was: ${level} (${sum}/40). I'm feeling...`);
 
     try {
-      localStorage.setItem('mindguard_latest_stress_score', Math.round((sum / 40) * 100).toString());
+      const normalized = Math.round((sum / 40) * 100);
+      localStorage.setItem('mindguard_latest_stress_score', normalized.toString());
+      recordAutoMoodFromScore(normalized, `PSS-10 (${level})`);
     } catch {
       // ignore
     }

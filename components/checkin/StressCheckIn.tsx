@@ -40,6 +40,7 @@ import {
   computeCalibratedStressScale,
 } from '../../services/stressScaleCalibration';
 import { runWellnessTriageAssessment } from '../../services/geminiService';
+import { recordAutoMoodFromScore } from '../../services/moodCalendarService';
 
 interface StressCheckInProps {
   onBack: () => void;
@@ -581,6 +582,7 @@ const StressCheckIn: React.FC<StressCheckInProps> = ({
           'mindguard_latest_stress_score',
           String(Math.round(result.overallStrainScore))
         );
+        recordAutoMoodFromScore(result.overallStrainScore, result.primaryCategory || 'Stress Check-In');
       } catch {
         // ignore storage quota errors
       }

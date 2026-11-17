@@ -14,6 +14,7 @@ import DailyAffirmationWidget from './DailyAffirmationWidget';
 import WeeklyGoalsCard from './WeeklyGoalsCard';
 import DeepBreathingGuide from './DeepBreathingGuide';
 import LiteratureClockCard from '../common/LiteratureClockCard';
+import MoodCalendar from './MoodCalendar';
 
 interface StudentDashboardProps {
   name: string;
@@ -320,6 +321,9 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({ name, onNavigate, o
                 />
               </div>
             </div>
+
+            {/* Current-Month Mood Calendar */}
+            <MoodCalendar />
           </div>
         </div>
       </div>
