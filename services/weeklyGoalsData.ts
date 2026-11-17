@@ -1,6 +1,7 @@
 import { WeeklyWellnessGoal, WellnessGoalCategory } from '../types';
 
 const STORAGE_KEY = 'mindguard_weekly_goals';
+export const GOALS_UPDATED_EVENT = 'mindguard:goals-updated';
 
 export interface GoalCategoryMeta {
   id: WellnessGoalCategory;
@@ -179,6 +180,9 @@ export function loadWeeklyGoals(): WeeklyWellnessGoal[] {
 export function saveWeeklyGoals(goals: WeeklyWellnessGoal[]): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(goals));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(GOALS_UPDATED_EVENT));
+    }
   } catch {
     // ignore storage quota failures
   }

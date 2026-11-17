@@ -16,6 +16,7 @@ import {
 import Card from '../common/Card';
 import {
   BrowserPermissionState,
+  REMINDERS_UPDATED_EVENT,
   dispatchCheckInNotification,
   formatTime12Hour,
   getBrowserNotificationPermission,
@@ -63,16 +64,26 @@ const StudentReminders: React.FC<StudentRemindersProps> = ({
   const activities = ['Breathing', 'Yoga', 'Meditation', 'Affirmations', 'Journaling'];
 
   useEffect(() => {
-    const saved = localStorage.getItem('mindguard_reminders');
-    if (saved) {
-      setReminders(JSON.parse(saved));
-    } else {
-      const defaults = [
-        { id: '1', time: '08:00', activity: 'Morning Affirmation', enabled: true },
-        { id: '2', time: '20:00', activity: 'Evening Reflection', enabled: true },
-      ];
-      setReminders(defaults);
-      localStorage.setItem('mindguard_reminders', JSON.stringify(defaults));
+    const fallbackDefaults: StudentReminder[] = [
+      { id: '1', time: '08:00', activity: 'Morning Affirmation', enabled: true },
+      { id: '2', time: '20:00', activity: 'Evening Reflection', enabled: true },
+    ];
+    try {
+      const saved = localStorage.getItem('mindguard_reminders');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setReminders(parsed);
+        } else {
+          setReminders(fallbackDefaults);
+          localStorage.setItem('mindguard_reminders', JSON.stringify(fallbackDefaults));
+        }
+      } else {
+        setReminders(fallbackDefaults);
+        localStorage.setItem('mindguard_reminders', JSON.stringify(fallbackDefaults));
+      }
+    } catch {
+      setReminders(fallbackDefaults);
     }
 
     if (getBrowserNotificationPermission() === 'granted') {
@@ -172,7 +183,12 @@ const StudentReminders: React.FC<StudentRemindersProps> = ({
 
   const saveReminders = (updated: StudentReminder[]) => {
     setReminders(updated);
-    localStorage.setItem('mindguard_reminders', JSON.stringify(updated));
+    try {
+      localStorage.setItem('mindguard_reminders', JSON.stringify(updated));
+      window.dispatchEvent(new CustomEvent(REMINDERS_UPDATED_EVENT));
+    } catch {
+      // ignore storage quota errors
+    }
   };
 
   const handleAddReminder = () => {

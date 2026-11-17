@@ -117,7 +117,9 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
     setBerkeleyResult(resultData);
 
     try {
-      const previous = JSON.parse(localStorage.getItem('mindguard_berkeley_quiz_results') || '[]');
+      const rawPrev = localStorage.getItem('mindguard_berkeley_quiz_results') || '[]';
+      const parsedPrev = JSON.parse(rawPrev);
+      const previous = Array.isArray(parsedPrev) ? parsedPrev : [];
       localStorage.setItem('mindguard_berkeley_quiz_results', JSON.stringify([resultData, ...previous]));
       localStorage.setItem('mindguard_latest_stress_score', resultData.normalizedPercentage.toString());
       window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
@@ -184,8 +186,15 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
         aiThemes: analysis.themes,
       };
 
-      const existingEntries = JSON.parse(localStorage.getItem('mindguard_journal_entries') || '[]');
+      let existingEntries: JournalEntry[] = [];
+      try {
+        const parsed = JSON.parse(localStorage.getItem('mindguard_journal_entries') || '[]');
+        if (Array.isArray(parsed)) existingEntries = parsed;
+      } catch {
+        existingEntries = [];
+      }
       localStorage.setItem('mindguard_journal_entries', JSON.stringify([newEntry, ...existingEntries]));
+      window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
       setJournalSaved(true);
     } catch (error) {
       console.error('Failed to save journal:', error);

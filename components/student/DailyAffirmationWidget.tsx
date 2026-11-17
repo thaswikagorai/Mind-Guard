@@ -9,9 +9,11 @@ import {
   CheckIcon,
   SpeakerWaveIcon,
   BookOpenIcon,
+  RefreshIcon,
 } from '../icons';
 import {
   DailyAffirmation,
+  CURATED_AFFIRMATIONS,
   AFFIRMATION_THEMES,
   getDailyAffirmation,
   markAffirmationViewedToday,
@@ -48,6 +50,9 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
   const [recentMoodContext, setRecentMoodContext] = useState<string | null>(null);
 
   const breathTimerRef = useRef<number | null>(null);
+  const breathCounterRef = useRef<number>(4);
+  const breathPhaseRef = useRef<'inhale' | 'hold' | 'exhale'>('inhale');
+  const [shuffleOffset, setShuffleOffset] = useState<number>(0);
 
   useEffect(() => {
     const updatedStreak = markAffirmationViewedToday();
@@ -57,7 +62,7 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
       const journalRaw = localStorage.getItem('mindguard_journal_entries');
       if (journalRaw) {
         const entries = JSON.parse(journalRaw);
-        if (entries && entries.length > 0 && entries[0].mood) {
+        if (Array.isArray(entries) && entries.length > 0 && entries[0].mood) {
           setRecentMoodContext(entries[0].mood);
         }
       }
@@ -70,12 +75,56 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
     setIsFavorited(isAffirmationFavorited(initialAffirmation.quote));
   }, [studentName]);
 
+  useEffect(() => {
+    return () => {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+      }
+      if (breathTimerRef.current) {
+        window.clearInterval(breathTimerRef.current);
+      }
+    };
+  }, []);
+
+  const formatForStudent = (item: DailyAffirmation): DailyAffirmation => {
+    const cleanName = studentName?.trim();
+    if (cleanName && cleanName.toLowerCase() !== 'student') {
+      return {
+        ...item,
+        quote: `${cleanName}, remember: ${item.quote.charAt(0).toLowerCase() + item.quote.slice(1)}`,
+      };
+    }
+    return item;
+  };
+
   const handleThemeChange = (themeId: string) => {
     setSelectedTheme(themeId);
+    setShuffleOffset(0);
     const updated = getDailyAffirmation(new Date(), studentName, themeId);
     setCurrentAffirmation(updated);
     setIsFavorited(isAffirmationFavorited(updated.quote));
-    if (isSpeaking && window.speechSynthesis) {
+    if (isSpeaking && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      setIsSpeaking(false);
+    }
+  };
+
+  const handleCycleAffirmation = () => {
+    const pool =
+      selectedTheme === 'all'
+        ? CURATED_AFFIRMATIONS
+        : CURATED_AFFIRMATIONS.filter((a) => a.theme === selectedTheme);
+    const safePool = pool.length > 0 ? pool : CURATED_AFFIRMATIONS;
+    const nextOffset = shuffleOffset + 1;
+    setShuffleOffset(nextOffset);
+    const currentIdx = safePool.findIndex(
+      (item) => currentAffirmation.id === item.id || currentAffirmation.quote.includes(item.quote.slice(12))
+    );
+    const nextItem = safePool[(Math.max(0, currentIdx) + 1) % safePool.length];
+    const formatted = formatForStudent(nextItem);
+    setCurrentAffirmation(formatted);
+    setIsFavorited(isAffirmationFavorited(formatted.quote));
+    if (isSpeaking && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       setIsSpeaking(false);
     }
@@ -117,11 +166,32 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
     setFavoritesList(getFavoriteAffirmations());
   };
 
-  const handleCopy = () => {
+  const handleCopy = async () => {
     const shareText = `"${currentAffirmation.quote}"\n— ${currentAffirmation.author} (via MindGuard)`;
-    navigator.clipboard.writeText(shareText);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2200);
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareText);
+      } else {
+        throw new Error('Clipboard unavailable');
+      }
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2200);
+    } catch {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = shareText;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2200);
+      } catch {
+        // ignore copy errors in restricted contexts
+      }
+    }
   };
 
   const handleToggleSpeech = () => {
@@ -157,6 +227,8 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
   };
 
   const handleStartBreathing = () => {
+    breathPhaseRef.current = 'inhale';
+    breathCounterRef.current = 4;
     setShowBreather(true);
     setBreathPhase('inhale');
     setBreathCounter(4);
@@ -164,24 +236,36 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
 
   useEffect(() => {
     if (!showBreather) {
-      if (breathTimerRef.current) clearInterval(breathTimerRef.current);
+      if (breathTimerRef.current) {
+        window.clearInterval(breathTimerRef.current);
+        breathTimerRef.current = null;
+      }
       return;
     }
 
     breathTimerRef.current = window.setInterval(() => {
-      setBreathCounter((prev) => {
-        if (prev > 1) return prev - 1;
-        setBreathPhase((currPhase) => {
-          if (currPhase === 'inhale') return 'hold';
-          if (currPhase === 'hold') return 'exhale';
-          return 'inhale';
-        });
-        return 4;
-      });
+      if (breathCounterRef.current > 1) {
+        breathCounterRef.current -= 1;
+        setBreathCounter(breathCounterRef.current);
+        return;
+      }
+      const nextPhase =
+        breathPhaseRef.current === 'inhale'
+          ? 'hold'
+          : breathPhaseRef.current === 'hold'
+          ? 'exhale'
+          : 'inhale';
+      breathPhaseRef.current = nextPhase;
+      breathCounterRef.current = 4;
+      setBreathPhase(nextPhase);
+      setBreathCounter(4);
     }, 1000);
 
     return () => {
-      if (breathTimerRef.current) clearInterval(breathTimerRef.current);
+      if (breathTimerRef.current) {
+        window.clearInterval(breathTimerRef.current);
+        breathTimerRef.current = null;
+      }
     };
   }, [showBreather]);
 
@@ -288,8 +372,8 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
         </div>
 
         {/* Interactive Action Bar */}
-        <div className="mt-4 pt-3.5 border-t border-[#cce7e3]/60 flex items-center justify-between gap-2 relative z-10">
-          <div className="flex items-center gap-2">
+        <div className="mt-4 pt-3.5 border-t border-[#cce7e3]/60 flex flex-wrap items-center justify-between gap-2 relative z-10">
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={handleToggleSpeech}
@@ -308,18 +392,30 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
               type="button"
               onClick={handleStartBreathing}
               className="px-3 py-2 rounded-xl text-xs font-semibold flex items-center space-x-1.5 bg-white/90 hover:bg-white text-[#335c5d] border border-[#cce7e3] transition-colors whitespace-nowrap min-h-[38px]"
-              title="Take a 10-second mindful pause"
+              title="Take a 12-second mindful 4-4-4 breath pause"
             >
-              <span>10s Breath</span>
+              <span>Quick Breath</span>
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleCycleAffirmation}
+              className="px-2.5 py-2 rounded-xl bg-white/90 hover:bg-white text-[#335c5d] border border-[#cce7e3] transition-colors flex items-center space-x-1 text-xs font-semibold min-h-[38px]"
+              title="Cycle to another affirmation in this vibe"
+              aria-label="Next affirmation"
+            >
+              <RefreshIcon className="w-3.5 h-3.5 text-[#0f766e]" />
+              <span className="hidden sm:inline">Next</span>
+            </button>
+
             <button
               type="button"
               onClick={handleCopy}
               className="px-2.5 py-2 rounded-xl bg-white/90 hover:bg-white text-[#335c5d] border border-[#cce7e3] transition-colors flex items-center space-x-1 min-h-[38px]"
               title="Copy affirmation"
+              aria-label="Copy affirmation"
             >
               {copied ? (
                 <>

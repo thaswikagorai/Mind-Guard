@@ -3,7 +3,7 @@ import { UserRole } from './types';
 import StudentDashboard from './components/student/StudentDashboard';
 import ParentDashboard from './components/parent/ParentDashboard';
 import MoodTracker from './components/student/MoodTracker';
-import WellnessActivities from './components/student/WellnessActivities';
+import WellnessActivities, { WellnessActivityType } from './components/student/WellnessActivities';
 import PrivateJournal from './components/student/PrivateJournal';
 import StudentMentor from './components/student/StudentMentor';
 import StudentReminders from './components/student/StudentReminders';
@@ -358,6 +358,7 @@ const App: React.FC = () => {
   const [appState, setAppState] = useState<'splash' | 'role_selection' | 'student_onboarding' | 'parent_onboarding' | 'dashboard'>('splash');
   const [userRole, setUserRole] = useState<UserRole>(UserRole.NONE);
   const [studentView, setStudentView] = useState<'dashboard' | 'mood-tracker' | 'stress-checkin' | 'wellness' | 'journal' | 'music' | 'mentor' | 'reminders' | 'goals' | 'stickers'>('dashboard');
+  const [wellnessActivity, setWellnessActivity] = useState<WellnessActivityType | null>(null);
   const [showWalkthrough, setShowWalkthrough] = useState(false);
 
   const [studentName, setStudentName] = useState('');
@@ -437,9 +438,15 @@ const App: React.FC = () => {
   };
 
   const handleStudentOnboardingSubmit = (name: string, email: string, phone: string) => {
-    setStudentName(name);
+    const cleanName = name.trim();
+    setStudentName(cleanName);
     setStudentEmail(email);
     setParentPhoneNum(phone);
+    try {
+      localStorage.setItem('mindguard_user_name', cleanName);
+    } catch {
+      // ignore storage errors
+    }
     setUserRole(UserRole.STUDENT);
     setAppState('dashboard');
 
@@ -467,12 +474,26 @@ const App: React.FC = () => {
     setParentPhoneNum('');
     setChildsEmail('');
     setStudentView('dashboard');
+    setWellnessActivity(null);
     setShowWalkthrough(false);
     setInAppNudge(null);
+    try {
+      localStorage.removeItem('mindguard_user_name');
+    } catch {
+      // ignore storage errors
+    }
   };
 
   const handleStudentNav = (view: 'mood-tracker' | 'stress-checkin' | 'wellness' | 'journal' | 'music' | 'mentor' | 'reminders' | 'goals' | 'stickers') => {
+    if (view === 'wellness') {
+      setWellnessActivity(null);
+    }
     setStudentView(view);
+  };
+
+  const handleLaunchWellnessActivity = (activity: WellnessActivityType) => {
+    setWellnessActivity(activity);
+    setStudentView('wellness');
   };
 
   const handleWalkthroughComplete = () => {
@@ -557,7 +578,7 @@ const App: React.FC = () => {
                       <MoodTracker
                         onComplete={() => setStudentView('dashboard')}
                         onNavigateToMentor={() => setStudentView('mentor')}
-                        onNavigateToWellness={() => setStudentView('wellness')}
+                        onNavigateToWellness={() => handleLaunchWellnessActivity('breathing')}
                       />
                     );
                   case 'stress-checkin':
@@ -565,12 +586,20 @@ const App: React.FC = () => {
                       <StressCheckIn
                         onBack={() => setStudentView('dashboard')}
                         defaultAgeGroup="youth"
-                        onLaunchBreathing={() => setStudentView('wellness')}
+                        onLaunchBreathing={() => handleLaunchWellnessActivity('breathing')}
                         onOpenMentor={() => setStudentView('mentor')}
                       />
                     );
                   case 'wellness':
-                    return <WellnessActivities onBack={() => setStudentView('dashboard')} />;
+                    return (
+                      <WellnessActivities
+                        initialActivity={wellnessActivity}
+                        onBack={() => {
+                          setWellnessActivity(null);
+                          setStudentView('dashboard');
+                        }}
+                      />
+                    );
                   case 'journal':
                     return <PrivateJournal onBack={() => setStudentView('dashboard')} />;
                   case 'music':
@@ -591,7 +620,14 @@ const App: React.FC = () => {
                     return <WeeklyGoals onBack={() => setStudentView('dashboard')} initialTab="stickers" />;
                   case 'dashboard':
                   default:
-                    return <StudentDashboard name={studentName} onNavigate={handleStudentNav} onLogout={handleLogout} />;
+                    return (
+                      <StudentDashboard
+                        name={studentName}
+                        onNavigate={handleStudentNav}
+                        onLaunchWellnessActivity={handleLaunchWellnessActivity}
+                        onLogout={handleLogout}
+                      />
+                    );
                 }
               })()}
             </>

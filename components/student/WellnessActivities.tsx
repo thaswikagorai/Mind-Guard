@@ -1,13 +1,20 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
-import { generateWellnessRoutine } from '../../services/geminiService';
 import Card from '../common/Card';
-import { ChevronLeftIcon, ClockIcon } from '../icons';
+import AffirmationsGallery from './AffirmationsGallery';
+import SixMinuteMeditation from './SixMinuteMeditation';
+import BeginnerYogaStudio from './BeginnerYogaStudio';
+import { ChevronLeftIcon, ClockIcon, CheckIcon } from '../icons';
+import { loadWeeklyGoals, saveWeeklyGoals } from '../../services/weeklyGoalsData';
+import { evaluateAndUnlockStickers } from '../../services/mindfulnessStickersData';
+
+export type WellnessActivityType = 'breathing' | 'yoga' | 'meditation' | 'affirmations';
 
 interface WellnessActivitiesProps {
   onBack: () => void;
+  initialActivity?: WellnessActivityType | null;
 }
 
-type ActivityType = 'breathing' | 'yoga' | 'meditation' | 'affirmations';
+type ActivityType = WellnessActivityType;
 
 interface BreathingPattern {
   name: string;
@@ -79,14 +86,17 @@ const ActivityButton: React.FC<{
 const BreathingGuide: React.FC = () => {
   const [activePattern, setActivePattern] = useState<BreathingPattern>(BREATHING_PATTERNS[0]);
   const [phase, setPhase] = useState<'inhale' | 'hold1' | 'exhale' | 'hold2'>('inhale');
-  const [counter, setCounter] = useState(0);
+  const [counter, setCounter] = useState<number>(BREATHING_PATTERNS[0].inhale);
   const [isRunning, setIsRunning] = useState(false);
 
   const [sessionDuration, setSessionDuration] = useState(SESSION_DURATIONS[0].value);
   const [sessionTimeRemaining, setSessionTimeRemaining] = useState(SESSION_DURATIONS[0].value);
+  const [secondsPracticed, setSecondsPracticed] = useState(0);
+  const [loggedNote, setLoggedNote] = useState<string | null>(null);
 
-  const timerRef = useRef<number | null>(null);
-  const sessionTimerRef = useRef<number | null>(null);
+  const phaseRef = useRef<'inhale' | 'hold1' | 'exhale' | 'hold2'>('inhale');
+  const counterRef = useRef<number>(BREATHING_PATTERNS[0].inhale);
+  const sessionRemainingRef = useRef<number>(SESSION_DURATIONS[0].value);
 
   const formatSessionTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -94,74 +104,111 @@ const BreathingGuide: React.FC = () => {
     return `${mins}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const stopBreathing = useCallback(() => {
-    if (timerRef.current) clearInterval(timerRef.current);
-    if (sessionTimerRef.current) clearInterval(sessionTimerRef.current);
-    setIsRunning(false);
-    setPhase('inhale');
-    setCounter(0);
-    setSessionTimeRemaining(sessionDuration);
-  }, [sessionDuration]);
+  const stopBreathing = useCallback(
+    (patternToReset: BreathingPattern = activePattern, durationToReset: number = sessionDuration) => {
+      setIsRunning(false);
+      phaseRef.current = 'inhale';
+      counterRef.current = patternToReset.inhale;
+      sessionRemainingRef.current = durationToReset;
+      setPhase('inhale');
+      setCounter(patternToReset.inhale);
+      setSessionTimeRemaining(durationToReset);
+    },
+    [activePattern, sessionDuration]
+  );
 
   const startBreathing = useCallback(() => {
-    setIsRunning(true);
-    setCounter(activePattern.inhale);
+    setLoggedNote(null);
+    setSecondsPracticed(0);
+    phaseRef.current = 'inhale';
+    counterRef.current = activePattern.inhale;
+    sessionRemainingRef.current = sessionDuration;
     setPhase('inhale');
+    setCounter(activePattern.inhale);
     setSessionTimeRemaining(sessionDuration);
-
-    sessionTimerRef.current = window.setInterval(() => {
-      setSessionTimeRemaining((prev) => {
-        if (prev <= 1) {
-          stopBreathing();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-  }, [activePattern, sessionDuration, stopBreathing]);
+    setIsRunning(true);
+  }, [activePattern, sessionDuration]);
 
   useEffect(() => {
     if (!isRunning) return;
 
-    timerRef.current = window.setInterval(() => {
-      setCounter((prev) => {
-        if (prev > 1) return prev - 1;
+    const intervalId = window.setInterval(() => {
+      setSecondsPracticed((prev) => prev + 1);
 
-        setPhase((currentPhase) => {
-          if (currentPhase === 'inhale') {
-            if (activePattern.hold1) {
-              setCounter(activePattern.hold1);
-              return 'hold1';
-            }
-            setCounter(activePattern.exhale);
-            return 'exhale';
-          }
-          if (currentPhase === 'hold1') {
-            setCounter(activePattern.exhale);
-            return 'exhale';
-          }
-          if (currentPhase === 'exhale') {
-            if (activePattern.hold2) {
-              setCounter(activePattern.hold2);
-              return 'hold2';
-            }
-            setCounter(activePattern.inhale);
-            return 'inhale';
-          }
-          if (currentPhase === 'hold2') {
-            setCounter(activePattern.inhale);
-            return 'inhale';
-          }
-          return 'inhale';
-        });
-        return 0;
-      });
+      if (sessionRemainingRef.current <= 1) {
+        stopBreathing(activePattern, sessionDuration);
+        return;
+      }
+
+      sessionRemainingRef.current -= 1;
+      setSessionTimeRemaining(sessionRemainingRef.current);
+
+      if (counterRef.current > 1) {
+        counterRef.current -= 1;
+        setCounter(counterRef.current);
+        return;
+      }
+
+      let nextPhase: 'inhale' | 'hold1' | 'exhale' | 'hold2' = 'inhale';
+      let nextCount = activePattern.inhale;
+
+      if (phaseRef.current === 'inhale') {
+        if (activePattern.hold1 && activePattern.hold1 > 0) {
+          nextPhase = 'hold1';
+          nextCount = activePattern.hold1;
+        } else {
+          nextPhase = 'exhale';
+          nextCount = activePattern.exhale;
+        }
+      } else if (phaseRef.current === 'hold1') {
+        nextPhase = 'exhale';
+        nextCount = activePattern.exhale;
+      } else if (phaseRef.current === 'exhale') {
+        if (activePattern.hold2 && activePattern.hold2 > 0) {
+          nextPhase = 'hold2';
+          nextCount = activePattern.hold2;
+        } else {
+          nextPhase = 'inhale';
+          nextCount = activePattern.inhale;
+        }
+      } else {
+        nextPhase = 'inhale';
+        nextCount = activePattern.inhale;
+      }
+
+      phaseRef.current = nextPhase;
+      counterRef.current = nextCount;
+      setPhase(nextPhase);
+      setCounter(nextCount);
     }, 1000);
 
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
-    };
-  }, [isRunning, activePattern]);
+    return () => window.clearInterval(intervalId);
+  }, [isRunning, activePattern, sessionDuration, stopBreathing]);
+
+  const handleLogPracticeToGoal = () => {
+    if (loggedNote) return;
+    const minsEarned = Math.max(1, Math.round(secondsPracticed / 60));
+    const goals = loadWeeklyGoals();
+    let matchedTitle: string | null = null;
+    const updated = goals.map((goal) => {
+      if (goal.category === 'breathing' && goal.currentCount < goal.targetCount) {
+        matchedTitle = goal.title;
+        return {
+          ...goal,
+          currentCount: Math.min(goal.targetCount, goal.currentCount + minsEarned),
+        };
+      }
+      return goal;
+    });
+    if (matchedTitle) {
+      saveWeeklyGoals(updated);
+      const { newlyUnlocked } = evaluateAndUnlockStickers(updated);
+      const stickerMsg = newlyUnlocked.length > 0 ? ` Earned "${newlyUnlocked[0].name}" sticker!` : '';
+      setLoggedNote(`Logged +${minsEarned} min to "${matchedTitle}".${stickerMsg}`);
+    } else {
+      setLoggedNote('Great breathwork! Your breathing goal is already complete for this week.');
+    }
+  };
 
   const getCircleScale = () => {
     if (!isRunning) return 'scale-100';
@@ -192,9 +239,9 @@ const BreathingGuide: React.FC = () => {
             key={p.name}
             onClick={() => {
               setActivePattern(p);
-              stopBreathing();
+              stopBreathing(p, sessionDuration);
             }}
-            className={`flex-shrink-0 px-4 py-2 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap ${
+            className={`flex-shrink-0 px-4 py-2 rounded-xl text-xs font-semibold transition-colors whitespace-nowrap min-h-[40px] ${
               activePattern.name === p.name
                 ? 'bg-[#0d9488] text-white'
                 : 'bg-[#f4fbfa] text-[#335c5d] border border-[#cce7e3] hover:border-[#8cd3ca]'
@@ -215,6 +262,7 @@ const BreathingGuide: React.FC = () => {
                 key={dur.value}
                 onClick={() => {
                   setSessionDuration(dur.value);
+                  sessionRemainingRef.current = dur.value;
                   setSessionTimeRemaining(dur.value);
                 }}
                 className={`px-4 py-1.5 rounded-lg text-xs font-semibold font-mono-num transition-colors ${
@@ -268,7 +316,7 @@ const BreathingGuide: React.FC = () => {
 
       <button
         type="button"
-        onClick={isRunning ? stopBreathing : startBreathing}
+        onClick={isRunning ? () => stopBreathing(activePattern, sessionDuration) : startBreathing}
         className={`w-full max-w-xs py-3.5 rounded-xl font-semibold text-base transition-all min-h-[48px] ${
           isRunning
             ? 'bg-[#eaf6f4] text-[#0f3d3e] border border-[#cce7e3] hover:bg-[#d7f0ec]'
@@ -277,115 +325,115 @@ const BreathingGuide: React.FC = () => {
       >
         {isRunning ? 'Stop Session' : 'Start Session'}
       </button>
+
+      {!isRunning && secondsPracticed >= 10 && (
+        <div className="mt-5 w-full max-w-md p-3.5 rounded-2xl bg-[#eefaf7] border border-[#99e2d8] flex flex-wrap items-center justify-between gap-2.5">
+          <p className="text-xs font-medium text-[#0f3d3e]">
+            {loggedNote || `Completed ${secondsPracticed}s of mindful breathing.`}
+          </p>
+          {!loggedNote && (
+            <button
+              type="button"
+              onClick={handleLogPracticeToGoal}
+              className="inline-flex items-center space-x-1 px-3 py-2 rounded-xl bg-[#0d9488] hover:bg-[#0f766e] text-white text-xs font-semibold min-h-[38px]"
+            >
+              <CheckIcon className="w-3.5 h-3.5" />
+              <span>Log to Weekly Goal</span>
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 };
 
-const WellnessActivities: React.FC<WellnessActivitiesProps> = ({ onBack }) => {
-  const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(null);
-  const [routine, setRoutine] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
+const ACTIVITY_TABS: Array<{ id: ActivityType; label: string; emoji: string }> = [
+  { id: 'breathing', label: 'Breathing', emoji: '🌬️' },
+  { id: 'yoga', label: 'Yoga', emoji: '🧘' },
+  { id: 'meditation', label: 'Meditation', emoji: '🧠' },
+  { id: 'affirmations', label: 'Affirmations', emoji: '✨' },
+];
 
-  const fetchRoutine = useCallback(async (activity: ActivityType) => {
-    setSelectedActivity(activity);
-    if (activity === 'breathing') return;
+const WellnessActivities: React.FC<WellnessActivitiesProps> = ({
+  onBack,
+  initialActivity = null,
+}) => {
+  const [selectedActivity, setSelectedActivity] = useState<ActivityType | null>(initialActivity);
 
-    setIsLoading(true);
-    setRoutine('');
-    const result = await generateWellnessRoutine(activity);
-    setRoutine(result);
-    setIsLoading(false);
-  }, []);
-
-  const renderRoutine = (text: string, type: ActivityType) => {
-    return text.split('\n').map((line, index) => {
-      const trimmedLine = line.trim();
-      if (trimmedLine === '') return <div key={index} className="h-3" />;
-      if (trimmedLine === '---') return <hr key={index} className="my-8 border-[#cce7e3]" />;
-      if (trimmedLine.startsWith('**') && trimmedLine.endsWith('**')) {
-        return (
-          <h3
-            key={index}
-            className="font-serif-elegant text-2xl font-bold text-[#0f3d3e] mt-8 mb-4 pb-2 border-b border-[#cce7e3]"
-          >
-            {trimmedLine.substring(2, trimmedLine.length - 2)}
-          </h3>
-        );
-      }
-      if (type === 'affirmations') {
-        return (
-          <div
-            key={index}
-            className="text-center my-6 p-6 bg-[#eaf6f4] rounded-2xl border border-[#cce7e3]"
-          >
-            <p className="font-serif-elegant text-xl sm:text-2xl text-[#0f3d3e] leading-snug">
-              "{trimmedLine.replace(/^\d+\.\s*/, '')}"
-            </p>
-          </div>
-        );
-      }
-      const stepMatch = trimmedLine.match(/^(\d+)\.\s+(.*)/);
-      if (stepMatch) {
-        return (
-          <div key={index} className="flex items-start space-x-4 mb-5">
-            <span className="flex-shrink-0 w-9 h-9 flex items-center justify-center bg-[#0d9488] text-white rounded-xl font-mono-num text-sm font-bold">
-              {stepMatch[1]}
-            </span>
-            <p className="text-[#335c5d] leading-relaxed text-base pt-1">{stepMatch[2]}</p>
-          </div>
-        );
-      }
-      return (
-        <p key={index} className="text-[#335c5d] leading-relaxed text-base mb-5">
-          {trimmedLine}
-        </p>
-      );
-    });
-  };
+  useEffect(() => {
+    setSelectedActivity(initialActivity ?? null);
+  }, [initialActivity]);
 
   if (selectedActivity) {
+    const isWideView =
+      selectedActivity === 'affirmations' ||
+      selectedActivity === 'meditation' ||
+      selectedActivity === 'yoga';
     return (
       <div className="p-4 sm:p-6 h-full flex flex-col bg-[#f4fbfa] overflow-hidden">
-        <div className="max-w-3xl mx-auto w-full flex flex-col h-full">
-          <div className="flex items-center mb-5">
-            <button
-              type="button"
-              onClick={() => setSelectedActivity(null)}
-              aria-label="Back to activities"
-              className="min-w-[44px] min-h-[44px] -ml-2 rounded-xl hover:bg-[#eaf6f4] text-[#4b7476] hover:text-[#0f3d3e] transition-colors mr-2 flex items-center justify-center"
+        <div
+          className={`${
+            isWideView ? 'max-w-4xl' : 'max-w-3xl'
+          } mx-auto w-full flex flex-col h-full`}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div className="flex items-center">
+              <button
+                type="button"
+                onClick={() => setSelectedActivity(null)}
+                aria-label="Back to activities"
+                className="min-w-[44px] min-h-[44px] -ml-2 rounded-xl hover:bg-[#eaf6f4] text-[#4b7476] hover:text-[#0f3d3e] transition-colors mr-2 flex items-center justify-center"
+              >
+                <ChevronLeftIcon className="w-5 h-5" />
+              </button>
+              <div>
+                <p className="text-xs font-semibold text-[#0f766e]">Mindful Practice</p>
+                <h1 className="font-serif-elegant text-2xl sm:text-3xl font-bold capitalize leading-none text-[#0f3d3e]">
+                  {selectedActivity}
+                </h1>
+              </div>
+            </div>
+
+            {/* Quick switcher between the 4 Wellness Activities */}
+            <div
+              role="tablist"
+              aria-label="Switch wellness activity"
+              className="flex items-center gap-1 p-1 bg-[#e3f5f1] border border-[#bde6de] rounded-xl overflow-x-auto max-w-full"
             >
-              <ChevronLeftIcon className="w-5 h-5" />
-            </button>
-            <div>
-              <p className="text-xs font-semibold text-[#0f766e]">Mindful Practice</p>
-              <h1 className="font-serif-elegant text-3xl font-bold capitalize leading-none text-[#0f3d3e]">
-                {selectedActivity}
-              </h1>
+              {ACTIVITY_TABS.map((tab) => {
+                const active = selectedActivity === tab.id;
+                return (
+                  <button
+                    key={tab.id}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => setSelectedActivity(tab.id)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all whitespace-nowrap flex items-center space-x-1 min-h-[36px] ${
+                      active
+                        ? 'bg-white text-[#0f3d3e] shadow-xs'
+                        : 'text-[#3d6b6d] hover:text-[#0f3d3e]'
+                    }`}
+                  >
+                    <span aria-hidden="true">{tab.emoji}</span>
+                    <span>{tab.label}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          <div className="flex-grow overflow-y-auto rounded-3xl bg-white border border-[#cce7e3] p-6 sm:p-10">
+          <div className="flex-grow overflow-y-auto rounded-3xl bg-white border border-[#cce7e3] p-5 sm:p-8 lg:p-10">
             {selectedActivity === 'breathing' ? (
               <div className="py-6">
                 <BreathingGuide />
               </div>
-            ) : isLoading ? (
-              <div className="flex flex-col justify-center items-center h-full py-20 text-center">
-                <div className="w-14 h-14 rounded-full border-4 border-[#eaf6f4] border-t-[#0d9488] animate-spin mb-5" />
-                <p className="font-serif-elegant text-2xl font-bold text-[#0f3d3e] mb-1">
-                  Finding your flow...
-                </p>
-                <p className="text-sm text-[#4b7476]">Creating a calm routine for you</p>
-              </div>
+            ) : selectedActivity === 'yoga' ? (
+              <BeginnerYogaStudio />
+            ) : selectedActivity === 'affirmations' ? (
+              <AffirmationsGallery />
             ) : (
-              <div className="max-w-prose mx-auto">
-                {renderRoutine(routine, selectedActivity)}
-                <div className="mt-12 pt-6 border-t border-[#eaf6f4] text-center">
-                  <p className="font-serif-elegant italic text-lg text-[#4b7476]">
-                    Take a slow breath and begin when ready.
-                  </p>
-                </div>
-              </div>
+              <SixMinuteMeditation />
             )}
           </div>
         </div>
@@ -419,28 +467,28 @@ const WellnessActivities: React.FC<WellnessActivitiesProps> = ({ onBack }) => {
             subtitle="Paced visual breath cycles"
             emoji="🌬️"
             tone="teal"
-            onClick={() => fetchRoutine('breathing')}
+            onClick={() => setSelectedActivity('breathing')}
           />
           <ActivityButton
             label="Yoga"
-            subtitle="Desk-friendly tension release"
+            subtitle="10 easy beginner yoga poses"
             emoji="🧘"
             tone="emerald"
-            onClick={() => fetchRoutine('yoga')}
+            onClick={() => setSelectedActivity('yoga')}
           />
           <ActivityButton
             label="Meditation"
-            subtitle="Guided grounding reset"
+            subtitle="6-minute breathing meditation guide"
             emoji="🧠"
             tone="indigo"
-            onClick={() => fetchRoutine('meditation')}
+            onClick={() => setSelectedActivity('meditation')}
           />
           <ActivityButton
             label="Affirmations"
-            subtitle="Encouraging mindset prompts"
+            subtitle="10 encouraging growth-mindset truths"
             emoji="✨"
             tone="amber"
-            onClick={() => fetchRoutine('affirmations')}
+            onClick={() => setSelectedActivity('affirmations')}
           />
         </div>
 

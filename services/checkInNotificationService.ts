@@ -2,6 +2,7 @@ import { CheckInNotificationSettings } from '../types';
 
 const SETTINGS_STORAGE_KEY = 'mindguard_checkin_notification_settings';
 export const IN_APP_NUDGE_EVENT = 'mindguard:checkin-nudge';
+export const REMINDERS_UPDATED_EVENT = 'mindguard:reminders-updated';
 
 export type BrowserPermissionState = 'granted' | 'denied' | 'default' | 'unsupported';
 
@@ -55,6 +56,9 @@ export function saveCheckInNotificationSettings(
 ): CheckInNotificationSettings {
   try {
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(REMINDERS_UPDATED_EVENT));
+    }
   } catch {
     // ignore storage errors
   }
