@@ -6,6 +6,7 @@ import {
   WeeklyWellnessGoal,
 } from '../../types';
 import {
+  GOALS_UPDATED_EVENT,
   GOAL_CATEGORIES,
   computeWeeklyGoalSummary,
   getCurrentWeekStart,
@@ -37,10 +38,24 @@ const WeeklyGoalsCard: React.FC<WeeklyGoalsCardProps> = ({
   const [newlyUnlocked, setNewlyUnlocked] = useState<MindfulnessStickerDefinition[]>([]);
 
   useEffect(() => {
-    const loaded = loadWeeklyGoals();
-    setGoals(loaded);
-    const evaluated = evaluateAndUnlockStickers(loaded);
-    setStickerRecords(evaluated.records);
+    const syncGoals = () => {
+      const loaded = loadWeeklyGoals();
+      setGoals(loaded);
+      const evaluated = evaluateAndUnlockStickers(loaded);
+      setStickerRecords(evaluated.records);
+      if (evaluated.newlyUnlocked.length > 0) {
+        setNewlyUnlocked(evaluated.newlyUnlocked);
+      }
+    };
+    syncGoals();
+    window.addEventListener(GOALS_UPDATED_EVENT, syncGoals);
+    window.addEventListener('storage', syncGoals);
+    window.addEventListener('focus', syncGoals);
+    return () => {
+      window.removeEventListener(GOALS_UPDATED_EVENT, syncGoals);
+      window.removeEventListener('storage', syncGoals);
+      window.removeEventListener('focus', syncGoals);
+    };
   }, []);
 
   const weekRange = getWeekRangeLabel(getCurrentWeekStart());

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { STUDENT_DATA } from '../../constants';
 import { generateParentSummary, generateParentActionPlan } from '../../services/geminiService';
+import { MOOD_UPDATED_EVENT } from '../../services/moodCalendarService';
 import Card from '../common/Card';
 import LiteratureClockCard from '../common/LiteratureClockCard';
 import { BellIcon, CheckCircleIcon, LightbulbIcon, SparklesIcon } from '../icons';
@@ -10,22 +11,59 @@ interface WellnessReportProps {
   childsEmail: string;
 }
 
+const formatStressUpdatedLabel = (isoTimestamp: string | null): string => {
+  if (!isoTimestamp) return 'Updated Recently';
+  const parsed = new Date(isoTimestamp);
+  if (Number.isNaN(parsed.getTime())) return 'Updated Recently';
+  const now = new Date();
+  if (
+    parsed.getFullYear() === now.getFullYear() &&
+    parsed.getMonth() === now.getMonth() &&
+    parsed.getDate() === now.getDate()
+  ) {
+    return 'Updated Today';
+  }
+  return `Updated ${parsed.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
+};
+
 const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
   const [summary, setSummary] = useState<string>('');
   const [actionPlan, setActionPlan] = useState<string[]>([]);
   const [isLoadingSummary, setIsLoadingSummary] = useState(true);
   const [isLoadingPlan, setIsLoadingPlan] = useState(true);
   const [dailyStressScore, setDailyStressScore] = useState<number | null>(null);
+  const [stressUpdatedLabel, setStressUpdatedLabel] = useState<string>('Updated Recently');
 
-  useEffect(() => {
-    const raw = localStorage.getItem('mindguard_latest_stress_score');
-    if (raw !== null) {
-      const parsed = Number(raw);
-      if (Number.isFinite(parsed)) {
-        setDailyStressScore(Math.max(0, Math.min(100, Math.round(parsed))));
+  const syncLatestStress = useCallback(() => {
+    try {
+      const raw = localStorage.getItem('mindguard_latest_stress_score');
+      if (raw !== null && raw.trim() !== '') {
+        const parsed = Number(raw);
+        if (Number.isFinite(parsed)) {
+          setDailyStressScore(Math.max(0, Math.min(100, Math.round(parsed))));
+          setStressUpdatedLabel(
+            formatStressUpdatedLabel(localStorage.getItem('mindguard_latest_stress_updated_at'))
+          );
+          return;
+        }
       }
+      setDailyStressScore(null);
+    } catch {
+      // ignore storage access errors
     }
   }, []);
+
+  useEffect(() => {
+    syncLatestStress();
+    window.addEventListener('focus', syncLatestStress);
+    window.addEventListener('storage', syncLatestStress);
+    window.addEventListener(MOOD_UPDATED_EVENT, syncLatestStress);
+    return () => {
+      window.removeEventListener('focus', syncLatestStress);
+      window.removeEventListener('storage', syncLatestStress);
+      window.removeEventListener(MOOD_UPDATED_EVENT, syncLatestStress);
+    };
+  }, [syncLatestStress]);
 
   const studentData = STUDENT_DATA[childsEmail] || STUDENT_DATA['default'];
   const { stressReport: reportData, alerts, activityLog } = studentData;
@@ -64,11 +102,13 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
   }, [activityLog, stressDelta]);
 
   useEffect(() => {
-    if (studentData) {
-      const fetchData = async () => {
-        setIsLoadingSummary(true);
-        setIsLoadingPlan(true);
+    if (!studentData) return;
+    let active = true;
+    const fetchData = async () => {
+      setIsLoadingSummary(true);
+      setIsLoadingPlan(true);
 
+      try {
         const [genSummary, genPlan] = await Promise.all([
           generateParentSummary(studentData.stressReport),
           generateParentActionPlan(
@@ -76,14 +116,20 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
             studentData.activityLog.map((l) => l.activity)
           ),
         ]);
-
+        if (!active) return;
         setSummary(genSummary);
         setActionPlan(genPlan);
-        setIsLoadingSummary(false);
-        setIsLoadingPlan(false);
-      };
-      fetchData();
-    }
+      } finally {
+        if (active) {
+          setIsLoadingSummary(false);
+          setIsLoadingPlan(false);
+        }
+      }
+    };
+    fetchData();
+    return () => {
+      active = false;
+    };
   }, [studentData, childsEmail]);
 
   const alertSeverityClasses = {
@@ -145,7 +191,7 @@ const WellnessReport: React.FC<WellnessReportProps> = ({ childsEmail }) => {
             </div>
           </div>
           <span className="text-xs font-semibold font-mono-num text-[#4b7476]">
-            Updated Early Nov
+            {stressUpdatedLabel}
           </span>
         </Card>
       )}

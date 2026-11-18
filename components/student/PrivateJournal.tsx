@@ -4,6 +4,8 @@ import { analyzeJournalEntry } from '../../services/geminiService';
 import { ChevronLeftIcon, KeyIcon, PlusIcon, TrashIcon } from '../icons';
 import Card from '../common/Card';
 import { MOOD_UPDATED_EVENT } from '../../services/moodCalendarService';
+import { loadWeeklyGoals, saveWeeklyGoals } from '../../services/weeklyGoalsData';
+import { evaluateAndUnlockStickers } from '../../services/mindfulnessStickersData';
 
 interface PrivateJournalProps {
   onBack: () => void;
@@ -29,19 +31,36 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    const saved = localStorage.getItem('mindguard_journal_entries');
-    if (saved) {
-      try {
-        setEntries(JSON.parse(saved));
-      } catch (e) {
-        console.error('Failed to parse journal entries', e);
+    try {
+      const saved = localStorage.getItem('mindguard_journal_entries');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const valid = parsed
+            .filter((item): item is JournalEntry => Boolean(item && typeof item.content === 'string'))
+            .map((item) => ({
+              id: typeof item.id === 'string' ? item.id : String(item.id ?? Date.now()),
+              date: typeof item.date === 'string' ? item.date : 'Recent',
+              content: item.content,
+              mood: Object.values(Mood).includes(item.mood) ? item.mood : Mood.HAPPY,
+              aiSentiment: typeof item.aiSentiment === 'string' && item.aiSentiment ? item.aiSentiment : 'Neutral',
+              aiThemes: Array.isArray(item.aiThemes) ? item.aiThemes.filter((t): t is string => typeof t === 'string') : [],
+            }));
+          setEntries(valid);
+        }
       }
+    } catch (e) {
+      console.error('Failed to parse journal entries', e);
     }
   }, []);
 
   useEffect(() => {
     if (isAuthenticated) {
-      localStorage.setItem('mindguard_journal_entries', JSON.stringify(entries));
+      try {
+        localStorage.setItem('mindguard_journal_entries', JSON.stringify(entries));
+      } catch {
+        // ignore storage quota errors
+      }
     }
   }, [entries, isAuthenticated]);
 
@@ -76,37 +95,73 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
     if (newEntryContent.trim() === '') return;
 
     setIsSaving(true);
-    const analysis = await analyzeJournalEntry(newEntryContent);
-    const newEntry: JournalEntry = {
-      id: Date.now().toString(),
-      date: new Date().toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric',
-      }),
-      content: newEntryContent,
-      mood: newEntryMood,
-      aiSentiment: analysis.sentiment,
-      aiThemes: analysis.themes,
-    };
-    const updatedEntries = [newEntry, ...entries];
-    setEntries(updatedEntries);
-    localStorage.setItem('mindguard_journal_entries', JSON.stringify(updatedEntries));
-    window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
-    setIsSaving(false);
-    setNewEntryContent('');
-    setView('list');
+    try {
+      const analysis = await analyzeJournalEntry(newEntryContent);
+      const safeSentiment =
+        typeof analysis?.sentiment === 'string' && analysis.sentiment.trim()
+          ? analysis.sentiment.trim()
+          : 'Neutral';
+      const safeThemes = Array.isArray(analysis?.themes)
+        ? analysis.themes.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
+        : [];
+
+      const newEntry: JournalEntry = {
+        id: Date.now().toString(),
+        date: new Date().toLocaleDateString('en-US', {
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric',
+        }),
+        content: newEntryContent,
+        mood: newEntryMood,
+        aiSentiment: safeSentiment,
+        aiThemes: safeThemes,
+      };
+      const updatedEntries = [newEntry, ...entries];
+      setEntries(updatedEntries);
+      try {
+        localStorage.setItem('mindguard_journal_entries', JSON.stringify(updatedEntries));
+        window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
+      } catch {
+        // ignore storage errors
+      }
+
+      // Sync with matching weekly journaling goals
+      const goals = loadWeeklyGoals();
+      let updatedGoal = false;
+      const nextGoals = goals.map((goal) => {
+        if (goal.category === 'journaling' && goal.currentCount < goal.targetCount) {
+          updatedGoal = true;
+          return { ...goal, currentCount: Math.min(goal.targetCount, goal.currentCount + 1) };
+        }
+        return goal;
+      });
+      if (updatedGoal) {
+        saveWeeklyGoals(nextGoals);
+        evaluateAndUnlockStickers(nextGoals);
+      }
+
+      setNewEntryContent('');
+      setNewEntryMood(Mood.HAPPY);
+      setView('list');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const deleteEntry = (id: string) => {
     const updatedEntries = entries.filter((entry) => entry.id !== id);
     setEntries(updatedEntries);
-    localStorage.setItem('mindguard_journal_entries', JSON.stringify(updatedEntries));
-    window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
+    try {
+      localStorage.setItem('mindguard_journal_entries', JSON.stringify(updatedEntries));
+      window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
+    } catch {
+      // ignore storage errors
+    }
   };
 
-  const sentimentTone = (sentiment: string) => {
-    switch (sentiment.toLowerCase()) {
+  const sentimentTone = (sentiment?: string) => {
+    switch ((sentiment || 'neutral').toLowerCase()) {
       case 'positive':
         return 'text-[#047857]';
       case 'negative':
@@ -132,6 +187,9 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
           <h2 className="text-2xl font-bold text-[#0f3d3e] font-serif-elegant">Journal Locked</h2>
           <p className="text-sm text-[#4b7476] mt-2 text-center leading-relaxed">
             Enter your 4-digit PIN to open your private reflections.
+          </p>
+          <p className="text-[11px] font-medium text-[#0f766e] mt-1 font-mono-num">
+            Default PIN: 2012
           </p>
           <form onSubmit={handlePinSubmit} className="mt-7 w-full">
             <input
@@ -173,7 +231,11 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
           <div className="flex items-center justify-between mb-5">
             <button
               type="button"
-              onClick={() => setView('list')}
+              onClick={() => {
+                setNewEntryContent('');
+                setNewEntryMood(Mood.HAPPY);
+                setView('list');
+              }}
               className="text-[#4b7476] hover:text-[#0f3d3e] flex items-center py-2 px-3 -ml-2 rounded-xl hover:bg-[#e3f7f3] transition-colors min-h-[44px]"
             >
               <ChevronLeftIcon className="w-5 h-5" />
@@ -193,12 +255,14 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
             <h2 className="text-xl font-bold text-[#0f3d3e] mb-5 font-serif-elegant">
               What's on your mind?
             </h2>
-            <div className="flex space-x-3 mb-6">
+            <div className="flex space-x-3 mb-6" role="group" aria-label="Select mood for journal entry">
               {Object.values(Mood).map((mood) => (
                 <button
                   type="button"
                   key={mood}
                   onClick={() => setNewEntryMood(mood)}
+                  aria-label={`Mood: ${mood}`}
+                  aria-pressed={newEntryMood === mood}
                   className={`p-3.5 rounded-2xl text-3xl transition-all duration-200 border ${
                     newEntryMood === mood
                       ? `${moodTileStyles[mood]} scale-105 shadow-xs`
@@ -286,9 +350,9 @@ const PrivateJournal: React.FC<PrivateJournalProps> = ({ onBack }) => {
                 <div className="flex items-center justify-between pt-4 border-t border-[#eaf6f4]">
                   <div className="flex flex-wrap items-center gap-2 text-xs text-[#4b7476]">
                     <span className={`font-semibold capitalize ${sentimentTone(entry.aiSentiment)}`}>
-                      {entry.aiSentiment}
+                      {entry.aiSentiment || 'Neutral'}
                     </span>
-                    {entry.aiThemes.map((theme) => (
+                    {(Array.isArray(entry.aiThemes) ? entry.aiThemes : []).map((theme) => (
                       <React.Fragment key={theme}>
                         <span aria-hidden="true">·</span>
                         <span>{theme}</span>

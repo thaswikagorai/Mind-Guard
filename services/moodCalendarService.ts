@@ -84,7 +84,14 @@ function parseEntryDateKey(rawId?: string, rawDateStr?: string): { dateKey: stri
     }
   }
   if (rawDateStr) {
-    const parsed = new Date(rawDateStr);
+    const trimmed = rawDateStr.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+      const localDate = fromDateKey(trimmed);
+      if (!Number.isNaN(localDate.getTime())) {
+        return { dateKey: trimmed, timestamp: localDate.getTime() };
+      }
+    }
+    const parsed = new Date(trimmed);
     if (!Number.isNaN(parsed.getTime())) {
       return { dateKey: toLocalDateKey(parsed), timestamp: parsed.getTime() };
     }

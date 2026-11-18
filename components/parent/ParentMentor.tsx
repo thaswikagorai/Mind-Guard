@@ -45,6 +45,7 @@ const ParentMentor: React.FC<ParentMentorProps> = ({ onBack, studentData }) => {
   const [status, setStatus] = useState('Online');
   const scrollRef = useRef<HTMLDivElement>(null);
   const isSendingRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const reportEntries = Array.isArray(studentData?.stressReport) ? studentData.stressReport : [];
   const latestValidStress =
@@ -54,6 +55,7 @@ const ParentMentor: React.FC<ParentMentorProps> = ({ onBack, studentData }) => {
       ?.stressLevel ?? 46;
 
   useEffect(() => {
+    isMountedRef.current = true;
     let active = true;
 
     const initChat = async () => {
@@ -73,6 +75,7 @@ const ParentMentor: React.FC<ParentMentorProps> = ({ onBack, studentData }) => {
     initChat();
     return () => {
       active = false;
+      isMountedRef.current = false;
     };
   }, [latestValidStress]);
 
@@ -85,6 +88,7 @@ const ParentMentor: React.FC<ParentMentorProps> = ({ onBack, studentData }) => {
   const updateSuggestions = async (history: Message[]) => {
     const cleanHistory = history.filter((m) => !m.isError && m.text.trim().length > 0);
     const newSuggestions = await generateQuickReplies(cleanHistory);
+    if (!isMountedRef.current) return;
     setSuggestions(newSuggestions);
   };
 
@@ -118,6 +122,7 @@ Tone: Reassuring, practical, expert. Focus on communication scripts for parents 
         historyForModel,
         userMessage,
         (partialText) => {
+          if (!isMountedRef.current) return;
           setMessages((prev) => {
             const last = prev[prev.length - 1];
             if (last?.role === 'model') {
@@ -127,6 +132,7 @@ Tone: Reassuring, practical, expert. Focus on communication scripts for parents 
           });
         }
       );
+      if (!isMountedRef.current) return;
       setStatus('Online');
       updateSuggestions([
         ...historyForModel,
@@ -134,6 +140,7 @@ Tone: Reassuring, practical, expert. Focus on communication scripts for parents 
         { role: 'model', text: modelText },
       ]);
     } catch (err) {
+      if (!isMountedRef.current) return;
       const errMessage =
         err instanceof Error && err.message.trim()
           ? err.message.trim()
@@ -155,7 +162,9 @@ Tone: Reassuring, practical, expert. Focus on communication scripts for parents 
       setStatus('Online');
     } finally {
       isSendingRef.current = false;
-      setIsTyping(false);
+      if (isMountedRef.current) {
+        setIsTyping(false);
+      }
     }
   };
 
@@ -255,7 +264,11 @@ Tone: Reassuring, practical, expert. Focus on communication scripts for parents 
             type="text"
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                handleSendMessage();
+              }
+            }}
             placeholder="Consult with Dr. Aris..."
             className="flex-grow py-3 px-4 bg-[#f4fbfa] border border-[#cce7e3] rounded-xl focus:outline-none focus:border-[#4f5d95] focus:bg-white text-sm text-[#0f3d3e] placeholder-[#7ca1a3] min-h-[44px]"
           />

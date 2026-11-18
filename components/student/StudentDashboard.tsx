@@ -285,13 +285,14 @@ const StudentDashboard: React.FC<StudentDashboardProps> = ({
     icon: React.ReactNode;
     onClick: () => void;
     tone: ToolTone;
-  }> = ({ title, description, statusText, icon, onClick, tone }) => {
+    className?: string;
+  }> = ({ title, description, statusText, icon, onClick, tone, className = '' }) => {
     const palette = TOOL_TONE_CLASSES[tone];
     return (
       <button
         type="button"
         onClick={onClick}
-        className={`w-full text-left rounded-2xl flex items-start space-x-4 p-4 sm:p-5 border h-full transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0d9488] ${palette.card}`}
+        className={`w-full text-left rounded-2xl flex items-start space-x-4 p-4 sm:p-5 border h-full transition-all duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#0d9488] ${palette.card} ${className}`}
       >
         <div
           className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${palette.icon}`}

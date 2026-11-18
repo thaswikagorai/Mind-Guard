@@ -73,7 +73,17 @@ const StudentReminders: React.FC<StudentRemindersProps> = ({
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed)) {
-          setReminders(parsed);
+          const valid = parsed.filter(
+            (r): r is StudentReminder =>
+              Boolean(
+                r &&
+                  typeof r.id === 'string' &&
+                  typeof r.time === 'string' &&
+                  typeof r.activity === 'string' &&
+                  typeof r.enabled === 'boolean'
+              )
+          );
+          setReminders(valid);
         } else {
           setReminders(fallbackDefaults);
           localStorage.setItem('mindguard_reminders', JSON.stringify(fallbackDefaults));
@@ -89,7 +99,28 @@ const StudentReminders: React.FC<StudentRemindersProps> = ({
     if (getBrowserNotificationPermission() === 'granted') {
       registerNotificationServiceWorker();
     }
+
+    const syncPermission = () => {
+      setPermissionState(getBrowserNotificationPermission());
+    };
+    window.addEventListener('focus', syncPermission);
+    document.addEventListener('visibilitychange', syncPermission);
+    return () => {
+      window.removeEventListener('focus', syncPermission);
+      document.removeEventListener('visibilitychange', syncPermission);
+    };
   }, []);
+
+  useEffect(() => {
+    if (!isAdding) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsAdding(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isAdding]);
 
   const updateNotifSettings = (updater: (prev: CheckInNotificationSettings) => CheckInNotificationSettings) => {
     setNotifSettings((prev) => {
@@ -192,9 +223,11 @@ const StudentReminders: React.FC<StudentRemindersProps> = ({
   };
 
   const handleAddReminder = () => {
+    const cleanTime = newTime.trim();
+    if (!cleanTime) return;
     const reminder: StudentReminder = {
       id: Date.now().toString(),
-      time: newTime,
+      time: cleanTime,
       activity: newActivity,
       enabled: true,
     };
@@ -601,7 +634,8 @@ const StudentReminders: React.FC<StudentRemindersProps> = ({
               <button
                 type="button"
                 onClick={handleAddReminder}
-                className="flex-1 py-3 bg-[#0d9488] text-white font-semibold rounded-xl hover:bg-[#0f766e] text-sm min-h-[44px]"
+                disabled={!newTime.trim()}
+                className="flex-1 py-3 bg-[#0d9488] text-white font-semibold rounded-xl hover:bg-[#0f766e] disabled:opacity-50 text-sm min-h-[44px]"
               >
                 Save
               </button>

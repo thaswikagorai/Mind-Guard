@@ -84,8 +84,10 @@ const MoodMusic: React.FC<MoodMusicProps> = ({ onBack }) => {
   const chimeTimerRef = useRef<number | null>(null);
   const sleepTimerRef = useRef<number | null>(null);
   const timeLeftRef = useRef<number | null>(null);
+  const playSessionRef = useRef(0);
 
   const stopAudioEngine = useCallback(() => {
+    playSessionRef.current += 1;
     if (chimeTimerRef.current !== null) {
       window.clearInterval(chimeTimerRef.current);
       chimeTimerRef.current = null;
@@ -117,6 +119,7 @@ const MoodMusic: React.FC<MoodMusicProps> = ({ onBack }) => {
   const startSoundscape = useCallback(
     async (track: MusicTrack, targetVolume: number) => {
       stopAudioEngine();
+      const sessionId = playSessionRef.current;
 
       const AudioCtx =
         window.AudioContext ||
@@ -136,6 +139,9 @@ const MoodMusic: React.FC<MoodMusicProps> = ({ onBack }) => {
         } catch {
           // ignore autoplay restriction error
         }
+      }
+      if (playSessionRef.current !== sessionId || ctx.state === 'closed') {
+        return;
       }
 
       const profile = SOUNDSCAPE_PROFILES[track.category];
@@ -267,6 +273,17 @@ const MoodMusic: React.FC<MoodMusicProps> = ({ onBack }) => {
       setTimeLeft(timeLeftRef.current);
     }, 1000);
   };
+
+  useEffect(() => {
+    if (!isTimerModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsTimerModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTimerModalOpen]);
 
   useEffect(() => {
     return () => {
@@ -428,7 +445,11 @@ const MoodMusic: React.FC<MoodMusicProps> = ({ onBack }) => {
                   type="text"
                   value={aiInput}
                   onChange={(e) => setAiInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleAiRecommend()}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
+                      handleAiRecommend();
+                    }
+                  }}
                   placeholder="Ex: I need calm focus for chemistry revision..."
                   className="flex-grow px-4 py-2.5 bg-[#f4fbfa] border border-[#cce7e3] rounded-xl text-sm text-[#0f3d3e] placeholder-[#7ca1a3] focus:outline-none focus:border-[#0d9488]"
                 />

@@ -9,8 +9,8 @@ const __dirname = path.dirname(__filename);
 const PORT = Number(process.env.PORT) || 3000;
 const MODEL_NAME = 'gemini-4-hydrogen';
 const FAST_CHAT_MODEL = 'gemini-3.1-flash-lite';
-const TRIAGE_MODEL_NAME = 'gemini-2.5-flash';
-const CHAT_MODEL_CANDIDATES = [FAST_CHAT_MODEL, MODEL_NAME, TRIAGE_MODEL_NAME] as const;
+const TRIAGE_MODEL_NAME = 'gemini-4-hydrogen';
+const CHAT_MODEL_CANDIDATES = [FAST_CHAT_MODEL, MODEL_NAME] as const;
 
 function getGeminiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
@@ -27,6 +27,18 @@ function getGeminiClient(): GoogleGenAI | null {
     },
   });
 }
+
+const isQuotaError = (err: unknown): boolean => {
+  const msg = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
+  return msg.includes('429') || msg.includes('resource_exhausted') || msg.includes('quota');
+};
+
+const stripCodeFences = (raw: string): string =>
+  raw
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
 
 async function generateWithFallback(
   ai: GoogleGenAI,
@@ -54,7 +66,11 @@ async function generateWithFallback(
       }
     } catch (err) {
       lastErr = err;
-      console.error(`Gemini generateWithFallback (${candidateModel}) failed:`, err instanceof Error ? err.message : err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.warn(`Gemini generateWithFallback (${candidateModel}) unavailable: ${errMsg.slice(0, 160)}`);
+      if (isQuotaError(err)) {
+        break;
+      }
     }
   }
   throw lastErr ?? new Error('All Gemini models returned empty responses.');
@@ -355,7 +371,7 @@ PRIVACY & SAFETY RULES:
       let response;
       try {
         response = await ai.models.generateContent({
-          model: TRIAGE_MODEL_NAME,
+          model: MODEL_NAME,
           contents: { parts: [imagePart, textPart] },
           config: responseConfig,
         });
@@ -363,7 +379,7 @@ PRIVACY & SAFETY RULES:
         const msg = primaryErr instanceof Error ? primaryErr.message : '';
         if (msg.includes('404') || msg.toLowerCase().includes('not found')) {
           response = await ai.models.generateContent({
-            model: MODEL_NAME,
+            model: FAST_CHAT_MODEL,
             contents: { parts: [imagePart, textPart] },
             config: responseConfig,
           });
@@ -372,7 +388,7 @@ PRIVACY & SAFETY RULES:
         }
       }
 
-      const rawText = (response.text ?? '').trim();
+      const rawText = stripCodeFences(response.text ?? '');
       const parsed = JSON.parse(rawText);
 
       const allowedCategories = new Set([
@@ -430,6 +446,12 @@ PRIVACY & SAFETY RULES:
         ...(hasValidCalibrated ? { calibratedScale } : {}),
       });
     } catch (error) {
+      if (isQuotaError(error)) {
+        console.warn('Wellness triage rate-limited (429).');
+        return res.status(429).json({
+          error: 'Hit a Gemini API rate or quota limit (429). Please wait a moment and try again.',
+        });
+      }
       console.error('Error running wellness triage:', error instanceof Error ? error.message : 'Unknown error');
       return res.status(502).json({
         error: 'Could not complete the triage assessment right now. Please try again in clear lighting.',
@@ -558,7 +580,7 @@ Return JSON only matching the required schema.`,
         },
       });
 
-      const rawText = (response.text ?? '').trim();
+      const rawText = stripCodeFences(response.text ?? '');
       const parsed = JSON.parse(rawText);
 
       // Normalize fields safely
@@ -608,6 +630,12 @@ Return JSON only matching the required schema.`,
         disclaimer: 'This is a rough estimate, not a medical assessment.',
       });
     } catch (error) {
+      if (isQuotaError(error)) {
+        console.warn('Check-in frame analysis rate-limited (429).');
+        return res.status(429).json({
+          error: 'Hit a Gemini API rate or quota limit (429). Please wait a moment and try again.',
+        });
+      }
       console.error('Error analyzing check-in frame:', error instanceof Error ? error.message : 'Unknown error');
       return res.status(502).json({
         error: 'Could not analyze the camera snapshot right now. Please try again in clear lighting.',
@@ -705,10 +733,7 @@ History: ${lastMessages || 'Greeting only'}`;
         },
         4500
       );
-      const raw = (response.text ?? '[]')
-        .trim()
-        .replace(/^```(?:json)?\s*/i, '')
-        .replace(/\s*```$/, '');
+      const raw = stripCodeFences(response.text ?? '[]') || '[]';
       const parsed = JSON.parse(raw);
       const cleaned = Array.isArray(parsed)
         ? parsed
@@ -780,7 +805,19 @@ Return as valid JSON object matching the schema.`;
           required: ['quote', 'author', 'reflectionPrompt', 'themeLabel'],
         },
       });
-      return res.json(JSON.parse((response.text ?? '{}').trim()));
+      const parsed = JSON.parse(stripCodeFences(response.text ?? '{}') || '{}');
+      return res.json({
+        quote: typeof parsed?.quote === 'string' && parsed.quote.trim() ? parsed.quote.trim() : fallback.quote,
+        author: typeof parsed?.author === 'string' && parsed.author.trim() ? parsed.author.trim() : fallback.author,
+        reflectionPrompt:
+          typeof parsed?.reflectionPrompt === 'string' && parsed.reflectionPrompt.trim()
+            ? parsed.reflectionPrompt.trim()
+            : fallback.reflectionPrompt,
+        themeLabel:
+          typeof parsed?.themeLabel === 'string' && parsed.themeLabel.trim()
+            ? parsed.themeLabel.trim()
+            : fallback.themeLabel,
+      });
     } catch {
       return res.json(fallback);
     }
@@ -813,7 +850,23 @@ Return as valid JSON object matching the schema.`;
           },
         }
       );
-      return res.json({ advice: JSON.parse((response.text ?? '[]').trim()) });
+      const parsed = JSON.parse(stripCodeFences(response.text ?? '[]') || '[]');
+      const cleaned = Array.isArray(parsed)
+        ? parsed
+            .filter(
+              (item) =>
+                item &&
+                typeof item.title === 'string' &&
+                typeof item.content === 'string'
+            )
+            .slice(0, 3)
+            .map((item) => ({
+              title: item.title.trim(),
+              content: item.content.trim(),
+              icon: typeof item.icon === 'string' && item.icon.trim() ? item.icon.trim() : '💙',
+            }))
+        : [];
+      return res.json({ advice: cleaned.length > 0 ? cleaned : fallback });
     } catch {
       return res.json({ advice: fallback });
     }
@@ -842,7 +895,16 @@ Return as valid JSON object matching the schema.`;
           },
         }
       );
-      return res.json(JSON.parse((response.text ?? '{}').trim()));
+      const parsed = JSON.parse(stripCodeFences(response.text ?? '{}') || '{}');
+      return res.json({
+        sentiment:
+          typeof parsed?.sentiment === 'string' && parsed.sentiment.trim()
+            ? parsed.sentiment.trim()
+            : fallback.sentiment,
+        themes: Array.isArray(parsed?.themes)
+          ? parsed.themes.filter((t: unknown): t is string => typeof t === 'string' && t.trim().length > 0).slice(0, 5)
+          : fallback.themes,
+      });
     } catch {
       return res.json(fallback);
     }
@@ -887,7 +949,11 @@ Return as valid JSON object matching the schema.`;
           },
         }
       );
-      return res.json({ steps: JSON.parse((response.text ?? '[]').trim()) });
+      const parsed = JSON.parse(stripCodeFences(response.text ?? '[]') || '[]');
+      const cleaned = Array.isArray(parsed)
+        ? parsed.filter((s: unknown): s is string => typeof s === 'string' && s.trim().length > 0).slice(0, 3)
+        : [];
+      return res.json({ steps: cleaned.length > 0 ? cleaned : fallback });
     } catch {
       return res.json({ steps: fallback });
     }
@@ -1049,7 +1115,13 @@ Return as valid JSON object matching the schema.`;
           clearTimeout(firstChunkTimer);
           lastError = streamErr;
           const errMsg = streamErr instanceof Error ? streamErr.message : String(streamErr);
-          console.error(`Mentor chat stream attempt (${candidateModel}) failed:`, errMsg);
+
+          if (isQuotaError(streamErr)) {
+            console.warn(`Mentor chat stream (${candidateModel}) rate-limited (429).`);
+            break;
+          }
+
+          console.warn(`Mentor chat stream attempt (${candidateModel}) failed:`, errMsg.slice(0, 200));
 
           const lower = errMsg.toLowerCase();
           const isAuthError =
@@ -1064,9 +1136,6 @@ Return as valid JSON object matching the schema.`;
 
           // If streaming failed cleanly (not timeout/quota/missing) before emitting chunks, try non-streaming once on this model
           const isSkipFallback =
-            lower.includes('429') ||
-            lower.includes('resource_exhausted') ||
-            lower.includes('quota') ||
             lower.includes('404') ||
             lower.includes('not_found') ||
             lower.includes('timeout') ||
@@ -1094,6 +1163,10 @@ Return as valid JSON object matching the schema.`;
               }
             } catch (singleErr) {
               lastError = singleErr;
+              if (isQuotaError(singleErr)) {
+                console.warn(`Mentor chat non-stream (${candidateModel}) rate-limited (429).`);
+                break;
+              }
             }
           }
         }
@@ -1117,11 +1190,152 @@ Return as valid JSON object matching the schema.`;
       res.end();
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Unknown error';
-      console.error('Mentor chat final error:', msg);
+      if (isQuotaError(error)) {
+        console.warn('Mentor chat unavailable due to Gemini quota limit (429).');
+      } else {
+        console.error('Mentor chat final error:', msg.slice(0, 240));
+      }
       if (!res.writableEnded) {
         res.write(`data: ${JSON.stringify({ error: formatGeminiError(error) })}\n\n`);
         res.end();
       }
+    }
+  });
+
+  const searchCache = new Map<
+    string,
+    {
+      payload: {
+        answer: string;
+        sources: { title: string; uri: string }[];
+        searchQueries: string[];
+      };
+      cachedAt: number;
+    }
+  >();
+  const SEARCH_CACHE_TTL_MS = 15 * 60 * 1000;
+
+  // Search-grounded student mental wellness research & resources endpoint
+  app.post('/api/gemini/search-resources', async (req, res) => {
+    const ai = getGeminiClient();
+    if (!ai) {
+      return res.status(503).json({
+        error: 'Live wellness search is unavailable because GEMINI_API_KEY is not configured.',
+      });
+    }
+
+    const rawQuery = typeof req.body?.query === 'string' ? req.body.query.trim().slice(0, 400) : '';
+    if (!rawQuery) {
+      return res.status(400).json({ error: 'Please enter a wellness question or topic to search.' });
+    }
+
+    const audience = req.body?.audience === 'parent' ? 'parent supporting their child' : 'student';
+    const safeContext =
+      typeof req.body?.context === 'string' && req.body.context.trim()
+        ? ` Additional context: ${req.body.context.trim().slice(0, 240)}`
+        : '';
+
+    const cacheKey = `${audience}::${rawQuery.toLowerCase()}`;
+    const cached = searchCache.get(cacheKey);
+    if (cached && Date.now() - cached.cachedAt < SEARCH_CACHE_TTL_MS) {
+      return res.json(cached.payload);
+    }
+
+    const isQuotaError = (err: unknown): boolean => {
+      const msg = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
+      return msg.includes('429') || msg.includes('quota') || msg.includes('resource_exhausted');
+    };
+
+    try {
+      const searchCandidates = [MODEL_NAME, FAST_CHAT_MODEL] as const;
+      let response: Awaited<ReturnType<typeof ai.models.generateContent>> | null = null;
+      let lastErr: unknown = null;
+
+      for (const candidate of searchCandidates) {
+        try {
+          const attempt = await ai.models.generateContent({
+            model: candidate,
+            contents: `Question from a ${audience}: ${rawQuery}${safeContext}`,
+            config: {
+              systemInstruction:
+                'You are Mindy, a supportive, evidence-based wellness guide. Use Google Search to find current, credible, student-safe research, practical study-balance strategies, sleep/stress physiology guidance, or verified support helplines. Keep answers calm, concise (2-4 short paragraphs or clear bullet points), non-diagnostic, and well-structured.',
+              tools: [{ googleSearch: {} }],
+              abortSignal: AbortSignal.timeout(14000),
+            },
+          });
+          if ((attempt.text ?? '').trim()) {
+            response = attempt;
+            break;
+          }
+        } catch (candidateErr) {
+          lastErr = candidateErr;
+          if (isQuotaError(candidateErr)) {
+            break;
+          }
+          console.warn(
+            `Search grounding attempt (${candidate}) skipped:`,
+            candidateErr instanceof Error ? candidateErr.message : 'Unknown error'
+          );
+        }
+      }
+
+      if (!response) {
+        throw lastErr ?? new Error('No search-grounded response received.');
+      }
+
+      const answer = (response.text ?? '').trim();
+      const groundingMeta = response.candidates?.[0]?.groundingMetadata;
+      const rawChunks = groundingMeta?.groundingChunks ?? [];
+
+      const seenUris = new Set<string>();
+      const sources: { title: string; uri: string }[] = [];
+      for (const chunk of rawChunks) {
+        const uri = chunk?.web?.uri;
+        const title = chunk?.web?.title;
+        if (
+          typeof uri === 'string' &&
+          (uri.startsWith('https://') || uri.startsWith('http://')) &&
+          !seenUris.has(uri)
+        ) {
+          seenUris.add(uri);
+          sources.push({
+            title: typeof title === 'string' && title.trim() ? title.trim() : uri,
+            uri,
+          });
+        }
+      }
+
+      const searchQueries = Array.isArray(groundingMeta?.webSearchQueries)
+        ? groundingMeta.webSearchQueries
+            .filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+            .slice(0, 4)
+        : [];
+
+      if (!answer) {
+        return res.status(502).json({
+          error: 'Could not retrieve search-grounded results right now. Please try rephrasing.',
+        });
+      }
+
+      const payload = {
+        answer,
+        sources: sources.slice(0, 6),
+        searchQueries,
+      };
+      searchCache.set(cacheKey, { payload, cachedAt: Date.now() });
+
+      return res.json(payload);
+    } catch (error) {
+      if (isQuotaError(error)) {
+        return res.status(429).json({
+          error: 'Live web search is temporarily at capacity. Please wait a minute and try again.',
+        });
+      }
+      const msg = error instanceof Error ? error.message : 'Unknown error';
+      console.warn('Search-grounded wellness lookup unavailable:', msg);
+      return res.status(502).json({
+        error: 'Could not complete live web search right now. Please try again shortly.',
+      });
     }
   });
 

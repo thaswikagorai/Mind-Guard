@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { PERCEIVED_STRESS_SCALE_QUESTIONS, BERKELEY_STRESS_ANXIETY_QUESTIONS } from '../../constants';
 import { ChevronLeftIcon, SparklesIcon } from '../icons';
 import { analyzeJournalEntry } from '../../services/geminiService';
@@ -29,6 +29,7 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
   const [journalContent, setJournalContent] = useState('');
   const [isSavingJournal, setIsSavingJournal] = useState(false);
   const [journalSaved, setJournalSaved] = useState(false);
+  const isCompletingRef = useRef(false);
 
   const activeQuestions =
     selectedQuiz === 'berkeley'
@@ -36,6 +37,7 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
       : PERCEIVED_STRESS_SCALE_QUESTIONS;
 
   const handleSwitchQuiz = (type: QuizType) => {
+    isCompletingRef.current = false;
     setSelectedQuiz(type);
     setCurrentQuestionIndex(0);
     setAnswers([]);
@@ -45,12 +47,16 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
   };
 
   const handleAnswer = (value: number) => {
+    if (isCompletingRef.current || showResult) return;
+    if (answers.length > currentQuestionIndex) return;
+
     const newAnswers = [...answers, value];
     setAnswers(newAnswers);
 
     if (currentQuestionIndex < activeQuestions.length - 1) {
       setCurrentQuestionIndex(currentQuestionIndex + 1);
     } else {
+      isCompletingRef.current = true;
       if (selectedQuiz === 'berkeley') {
         calculateBerkeleyResult(newAnswers);
       } else {
@@ -61,7 +67,8 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
   };
 
   const handlePreviousQuestion = () => {
-    if (currentQuestionIndex > 0) {
+    if (currentQuestionIndex > 0 && !showResult) {
+      isCompletingRef.current = false;
       setCurrentQuestionIndex(currentQuestionIndex - 1);
       setAnswers(answers.slice(0, -1));
     }
@@ -122,6 +129,7 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
       const previous = Array.isArray(parsedPrev) ? parsedPrev : [];
       localStorage.setItem('mindguard_berkeley_quiz_results', JSON.stringify([resultData, ...previous]));
       localStorage.setItem('mindguard_latest_stress_score', resultData.normalizedPercentage.toString());
+      localStorage.setItem('mindguard_latest_stress_updated_at', new Date().toISOString());
       window.dispatchEvent(new CustomEvent(MOOD_UPDATED_EVENT));
     } catch {
       // ignore
@@ -150,6 +158,7 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
     try {
       const normalized = Math.round((sum / 40) * 100);
       localStorage.setItem('mindguard_latest_stress_score', normalized.toString());
+      localStorage.setItem('mindguard_latest_stress_updated_at', new Date().toISOString());
       recordAutoMoodFromScore(normalized, `PSS-10 (${level})`);
     } catch {
       // ignore
@@ -182,8 +191,11 @@ const MoodTracker: React.FC<MoodTrackerProps> = ({
         date: new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' }),
         content: journalContent,
         mood: mood,
-        aiSentiment: analysis.sentiment,
-        aiThemes: analysis.themes,
+        aiSentiment:
+          typeof analysis?.sentiment === 'string' && analysis.sentiment.trim()
+            ? analysis.sentiment.trim()
+            : 'Neutral',
+        aiThemes: Array.isArray(analysis?.themes) ? analysis.themes : [],
       };
 
       let existingEntries: JournalEntry[] = [];

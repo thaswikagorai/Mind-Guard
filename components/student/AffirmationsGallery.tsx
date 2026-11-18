@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ChevronLeftIcon,
   SpeakerWaveIcon,
@@ -270,6 +270,7 @@ const AffirmationsGallery: React.FC = () => {
   });
   const [speakingId, setSpeakingId] = useState<string | null>(null);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
 
   const activeItem = WELLNESS_AFFIRMATIONS[activeIndex];
   const isActiveAffirmed = affirmedIds.includes(activeItem.id);
@@ -278,6 +279,9 @@ const AffirmationsGallery: React.FC = () => {
     return () => {
       if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.cancel();
+      }
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
       }
     };
   }, []);
@@ -314,14 +318,38 @@ const AffirmationsGallery: React.FC = () => {
   );
 
   const handleCopy = useCallback(async (item: CuratedAffirmationItem) => {
+    let didCopy = false;
     try {
-      await navigator.clipboard.writeText(item.text);
-      setCopiedId(item.id);
-      window.setTimeout(() => {
-        setCopiedId((current) => (current === item.id ? null : current));
-      }, 1800);
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(item.text);
+        didCopy = true;
+      } else {
+        throw new Error('Clipboard unavailable');
+      }
     } catch {
-      // ignore clipboard restrictions
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = item.text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        didCopy = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch {
+        didCopy = false;
+      }
+    }
+
+    if (didCopy) {
+      setCopiedId(item.id);
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = window.setTimeout(() => {
+        setCopiedId((current) => (current === item.id ? null : current));
+        copyTimerRef.current = null;
+      }, 1800);
     }
   }, []);
 

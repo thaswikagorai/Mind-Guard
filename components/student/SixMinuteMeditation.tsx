@@ -151,26 +151,27 @@ const SixMinuteMeditation: React.FC = () => {
     if (!isRunning) return;
 
     const timer = window.setInterval(() => {
-      setRemainingSeconds((prev) => {
-        if (prev <= 1) {
-          setIsRunning(false);
-          setHasCompleted(true);
-          if (bellEnabled) {
-            playSoftBell(audioCtxRef, 528);
-          }
-          return 0;
-        }
-        return prev - 1;
-      });
+      setRemainingSeconds((prev) => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
 
     return () => window.clearInterval(timer);
-  }, [isRunning, bellEnabled]);
+  }, [isRunning]);
+
+  // Trigger completion state & chime cleanly outside state updaters
+  useEffect(() => {
+    if (isRunning && remainingSeconds === 0) {
+      setIsRunning(false);
+      setHasCompleted(true);
+      if (bellEnabled) {
+        playSoftBell(audioCtxRef, 528);
+      }
+    }
+  }, [isRunning, remainingSeconds, bellEnabled]);
 
   // Trigger subtle phase transition bells at 1:00 and 5:00 marks
   useEffect(() => {
     const prevElapsed = prevElapsedRef.current;
-    if (isRunning && bellEnabled) {
+    if (isRunning && bellEnabled && remainingSeconds > 0) {
       if (prevElapsed < 60 && elapsedSeconds >= 60) {
         playSoftBell(audioCtxRef, 440);
       } else if (prevElapsed < 300 && elapsedSeconds >= 300) {
@@ -178,7 +179,7 @@ const SixMinuteMeditation: React.FC = () => {
       }
     }
     prevElapsedRef.current = elapsedSeconds;
-  }, [elapsedSeconds, isRunning, bellEnabled]);
+  }, [elapsedSeconds, isRunning, bellEnabled, remainingSeconds]);
 
   useEffect(() => {
     return () => {
@@ -193,15 +194,19 @@ const SixMinuteMeditation: React.FC = () => {
       setRemainingSeconds(TOTAL_SECONDS);
       setHasCompleted(false);
       prevElapsedRef.current = 0;
-    }
-    setIsRunning((prev) => {
-      const next = !prev;
-      if (next && bellEnabled && elapsedSeconds === 0) {
+      if (bellEnabled) {
         playSoftBell(audioCtxRef, 528);
       }
-      return next;
-    });
-  }, [remainingSeconds, bellEnabled, elapsedSeconds]);
+      setIsRunning(true);
+      return;
+    }
+
+    const nextRunning = !isRunning;
+    if (nextRunning && bellEnabled && elapsedSeconds === 0) {
+      playSoftBell(audioCtxRef, 528);
+    }
+    setIsRunning(nextRunning);
+  }, [remainingSeconds, isRunning, bellEnabled, elapsedSeconds]);
 
   const handleReset = useCallback(() => {
     setIsRunning(false);

@@ -191,6 +191,7 @@ const StressCheckIn: React.FC<StressCheckInProps> = ({
   const rppgEstimatorRef = useRef<RppgPulseEstimator>(new RppgPulseEstimator());
   const latestTelemetryRef = useRef<LocalBiometricTelemetry>(INITIAL_TELEMETRY);
   const resultsAnchorRef = useRef<HTMLDivElement | null>(null);
+  const snapshotTimerRef = useRef<number | null>(null);
   const autoCaptureArmedRef = useRef<{ enabled: boolean; completed: boolean; assessing: boolean }>({
     enabled: true,
     completed: false,
@@ -198,6 +199,10 @@ const StressCheckIn: React.FC<StressCheckInProps> = ({
   });
 
   const stopCameraResources = useCallback(() => {
+    if (snapshotTimerRef.current !== null) {
+      window.clearTimeout(snapshotTimerRef.current);
+      snapshotTimerRef.current = null;
+    }
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current);
       rafRef.current = null;
@@ -459,7 +464,13 @@ const StressCheckIn: React.FC<StressCheckInProps> = ({
                   setForeheadRoi(roiSample ? roiSample.roiNorm : null);
                   setAutoCaptureCompleted(true);
                   setSnapshotFlash(true);
-                  window.setTimeout(() => setSnapshotFlash(false), 260);
+                  if (snapshotTimerRef.current !== null) {
+                    window.clearTimeout(snapshotTimerRef.current);
+                  }
+                  snapshotTimerRef.current = window.setTimeout(() => {
+                    setSnapshotFlash(false);
+                    snapshotTimerRef.current = null;
+                  }, 260);
                   setGuidanceText('Face fitted — snapshot captured automatically');
                   runAssessmentRef.current();
                 } else if (nowMs - lastUiSyncRef.current >= 320) {
@@ -582,6 +593,7 @@ const StressCheckIn: React.FC<StressCheckInProps> = ({
           'mindguard_latest_stress_score',
           String(Math.round(result.overallStrainScore))
         );
+        localStorage.setItem('mindguard_latest_stress_updated_at', new Date().toISOString());
         recordAutoMoodFromScore(result.overallStrainScore, result.primaryCategory || 'Stress Check-In');
       } catch {
         // ignore storage quota errors

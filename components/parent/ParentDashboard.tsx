@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Card from '../common/Card';
 import WellnessReport from './WellnessReport';
 import ParentMentor from './ParentMentor';
@@ -117,13 +117,21 @@ const AdviceSupport: React.FC<{ studentData: any; onOpenMentor: () => void }> = 
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
+    let active = true;
     const fetchAdvice = async () => {
       setIsLoading(true);
-      const res = await generateParentalAdvice(studentData.stressReport);
-      setAdvice(res);
-      setIsLoading(false);
+      try {
+        const res = await generateParentalAdvice(studentData.stressReport);
+        if (!active) return;
+        setAdvice(res);
+      } finally {
+        if (active) setIsLoading(false);
+      }
     };
     fetchAdvice();
+    return () => {
+      active = false;
+    };
   }, [studentData]);
 
   return (
@@ -207,20 +215,85 @@ const AdviceSupport: React.FC<{ studentData: any; onOpenMentor: () => void }> = 
 };
 
 const ControlSettings: React.FC = () => {
-  const [controlledMode, setControlledMode] = useState(false);
-  const [reminders, setReminders] = useState(true);
-  const [nudge, setNudge] = useState('');
-  const [isSavingNudge, setIsSavingNudge] = useState(false);
+  const [controlledMode, setControlledMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('mindguard_parent_controlled_mode') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [reminders, setReminders] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('mindguard_parent_reminders');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const [nudge, setNudge] = useState<string>(() => {
+    try {
+      return localStorage.getItem('parent_nudge_message') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [nudgeStatus, setNudgeStatus] = useState<'idle' | 'sent' | 'cleared'>('idle');
+  const nudgeTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
-    const savedNudge = localStorage.getItem('parent_nudge_message');
-    if (savedNudge) setNudge(savedNudge);
+    return () => {
+      if (nudgeTimerRef.current !== null) {
+        window.clearTimeout(nudgeTimerRef.current);
+      }
+    };
   }, []);
 
   const handleSaveNudge = () => {
-    setIsSavingNudge(true);
-    localStorage.setItem('parent_nudge_message', nudge);
-    setTimeout(() => setIsSavingNudge(false), 900);
+    const trimmed = nudge.trim();
+    try {
+      if (trimmed) {
+        localStorage.setItem('parent_nudge_message', trimmed);
+        setNudge(trimmed);
+        setNudgeStatus('sent');
+      } else {
+        localStorage.removeItem('parent_nudge_message');
+        setNudge('');
+        setNudgeStatus('cleared');
+      }
+    } catch {
+      // ignore storage errors
+    }
+    if (nudgeTimerRef.current !== null) {
+      window.clearTimeout(nudgeTimerRef.current);
+    }
+    nudgeTimerRef.current = window.setTimeout(() => {
+      setNudgeStatus('idle');
+      nudgeTimerRef.current = null;
+    }, 1200);
+  };
+
+  const handleToggleControlledMode = () => {
+    setControlledMode((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('mindguard_parent_controlled_mode', String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
+  };
+
+  const handleToggleReminders = () => {
+    setReminders((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('mindguard_parent_reminders', String(next));
+      } catch {
+        // ignore storage errors
+      }
+      return next;
+    });
   };
 
   return (
@@ -242,7 +315,13 @@ const ControlSettings: React.FC = () => {
             onClick={handleSaveNudge}
             className="w-full py-3 bg-gradient-to-r from-[#0d9488] to-[#0891b2] text-white font-semibold rounded-xl hover:brightness-105 transition-all text-sm min-h-[44px]"
           >
-            {isSavingNudge ? 'Sent to Student Hub' : 'Send to Child'}
+            {nudgeStatus === 'sent'
+              ? 'Sent to Student Hub'
+              : nudgeStatus === 'cleared'
+              ? 'Cleared from Student Hub'
+              : nudge.trim()
+              ? 'Send to Child'
+              : 'Clear Note'}
           </button>
         </Card>
       </section>
@@ -262,7 +341,7 @@ const ControlSettings: React.FC = () => {
                 <input
                   type="checkbox"
                   checked={controlledMode}
-                  onChange={() => setControlledMode(!controlledMode)}
+                  onChange={handleToggleControlledMode}
                   className="sr-only peer"
                 />
                 <div className="w-12 h-7 bg-[#cce7e3] rounded-full peer peer-focus:ring-2 peer-focus:ring-[#0d9488] peer-checked:after:translate-x-5 after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform peer-checked:bg-[#0d9488]" />
@@ -280,7 +359,7 @@ const ControlSettings: React.FC = () => {
                 <input
                   type="checkbox"
                   checked={reminders}
-                  onChange={() => setReminders(!reminders)}
+                  onChange={handleToggleReminders}
                   className="sr-only peer"
                 />
                 <div className="w-12 h-7 bg-[#cce7e3] rounded-full peer peer-focus:ring-2 peer-focus:ring-[#0d9488] peer-checked:after:translate-x-5 after:content-[''] after:absolute after:top-1 after:left-1 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform peer-checked:bg-[#0d9488]" />

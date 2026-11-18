@@ -382,6 +382,14 @@ const App: React.FC = () => {
     const params = new URLSearchParams(window.location.search);
     if (params.get('view') === 'stress-checkin') {
       setStudentView('stress-checkin');
+      try {
+        params.delete('view');
+        const nextSearch = params.toString();
+        const nextUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+        window.history.replaceState({}, '', nextUrl);
+      } catch {
+        // ignore history error
+      }
     }
 
     const intervalId = window.setInterval(() => {
@@ -450,8 +458,12 @@ const App: React.FC = () => {
     setUserRole(UserRole.STUDENT);
     setAppState('dashboard');
 
-    if (!localStorage.getItem('mindguard_walkthrough_student')) {
-      setShowWalkthrough(true);
+    try {
+      if (!localStorage.getItem('mindguard_walkthrough_student')) {
+        setShowWalkthrough(true);
+      }
+    } catch {
+      // ignore storage errors
     }
   };
 
@@ -461,8 +473,12 @@ const App: React.FC = () => {
     setUserRole(UserRole.PARENT);
     setAppState('dashboard');
 
-    if (!localStorage.getItem('mindguard_walkthrough_parent')) {
-      setShowWalkthrough(true);
+    try {
+      if (!localStorage.getItem('mindguard_walkthrough_parent')) {
+        setShowWalkthrough(true);
+      }
+    } catch {
+      // ignore storage errors
     }
   };
 
@@ -497,7 +513,11 @@ const App: React.FC = () => {
   };
 
   const handleWalkthroughComplete = () => {
-    localStorage.setItem(`mindguard_walkthrough_${userRole.toLowerCase()}`, 'true');
+    try {
+      localStorage.setItem(`mindguard_walkthrough_${userRole.toLowerCase()}`, 'true');
+    } catch {
+      // ignore storage errors
+    }
     setShowWalkthrough(false);
   };
 

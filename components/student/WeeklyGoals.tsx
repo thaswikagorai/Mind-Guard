@@ -7,6 +7,7 @@ import {
   WellnessGoalCategory,
 } from '../../types';
 import {
+  GOALS_UPDATED_EVENT,
   GOAL_CATEGORIES,
   GoalPreset,
   WEEKLY_GOAL_PRESETS,
@@ -53,7 +54,7 @@ const WeeklyGoals: React.FC<WeeklyGoalsProps> = ({ onBack, initialTab = 'goals' 
   const [isAddingCustom, setIsAddingCustom] = useState(false);
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState<WellnessGoalCategory>('breathing');
-  const [targetCount, setTargetCount] = useState<number>(3);
+  const [targetCountStr, setTargetCountStr] = useState<string>('3');
   const [unit, setUnit] = useState<string>('sessions');
   const [formError, setFormError] = useState('');
 
@@ -66,9 +67,34 @@ const WeeklyGoals: React.FC<WeeklyGoalsProps> = ({ onBack, initialTab = 'goals' 
   }, [initialTab]);
 
   useEffect(() => {
-    const evaluated = evaluateAndUnlockStickers(goals, weekStart);
-    setStickerRecords(evaluated.records);
-  }, []); // sync on initial mount
+    const syncGoalsAndStickers = () => {
+      const freshGoals = loadWeeklyGoals();
+      setGoals(freshGoals);
+      const evaluated = evaluateAndUnlockStickers(freshGoals, getCurrentWeekStart());
+      setStickerRecords(evaluated.records);
+    };
+    syncGoalsAndStickers();
+    window.addEventListener(GOALS_UPDATED_EVENT, syncGoalsAndStickers);
+    window.addEventListener('storage', syncGoalsAndStickers);
+    window.addEventListener('focus', syncGoalsAndStickers);
+    return () => {
+      window.removeEventListener(GOALS_UPDATED_EVENT, syncGoalsAndStickers);
+      window.removeEventListener('storage', syncGoalsAndStickers);
+      window.removeEventListener('focus', syncGoalsAndStickers);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!selectedSticker && !isAddingCustom) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedSticker) setSelectedSticker(null);
+        if (isAddingCustom) setIsAddingCustom(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedSticker, isAddingCustom]);
 
   const updateGoals = (next: WeeklyWellnessGoal[]) => {
     setGoals(next);
@@ -139,7 +165,7 @@ const WeeklyGoals: React.FC<WeeklyGoalsProps> = ({ onBack, initialTab = 'goals' 
       return;
     }
 
-    const safeTarget = Math.max(1, Math.min(60, Number(targetCount) || 1));
+    const safeTarget = Math.max(1, Math.min(60, Number(targetCountStr) || 1));
     const newGoal: WeeklyWellnessGoal = {
       id: `goal-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
       title: trimmed,
@@ -154,7 +180,7 @@ const WeeklyGoals: React.FC<WeeklyGoalsProps> = ({ onBack, initialTab = 'goals' 
     updateGoals([newGoal, ...goals]);
     setTitle('');
     setCategory('breathing');
-    setTargetCount(3);
+    setTargetCountStr('3');
     setUnit('sessions');
     setFormError('');
     setIsAddingCustom(false);
@@ -823,10 +849,22 @@ const WeeklyGoals: React.FC<WeeklyGoalsProps> = ({ onBack, initialTab = 'goals' 
                     type="number"
                     min={1}
                     max={60}
-                    value={targetCount}
-                    onChange={(e) =>
-                      setTargetCount(Math.max(1, Math.min(60, Number(e.target.value) || 1)))
-                    }
+                    value={targetCountStr}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val === '') {
+                        setTargetCountStr('');
+                        return;
+                      }
+                      const num = Number(val);
+                      if (Number.isFinite(num)) {
+                        setTargetCountStr(String(Math.min(60, Math.max(0, Math.trunc(num)))));
+                      }
+                    }}
+                    onBlur={() => {
+                      const parsed = Math.max(1, Math.min(60, Number(targetCountStr) || 1));
+                      setTargetCountStr(String(parsed));
+                    }}
                     className="w-full px-4 py-3 bg-[#f4fbfa] border border-[#bde6de] rounded-xl text-sm font-bold font-mono-num text-[#0f3d3e] focus:outline-none focus:border-[#0d9488] focus:bg-white"
                   />
                 </div>

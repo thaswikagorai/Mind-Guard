@@ -294,3 +294,14 @@ export interface DailyMoodSummary {
   primaryMood: CalendarMoodKey;
   entries: MoodLogEntry[];
 }
+
+export interface SearchGroundedSource {
+  title: string;
+  uri: string;
+}
+
+export interface SearchGroundedWellnessResponse {
+  answer: string;
+  sources: SearchGroundedSource[];
+  searchQueries: string[];
+}

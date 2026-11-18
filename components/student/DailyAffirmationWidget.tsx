@@ -50,6 +50,7 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
   const [recentMoodContext, setRecentMoodContext] = useState<string | null>(null);
 
   const breathTimerRef = useRef<number | null>(null);
+  const copyTimerRef = useRef<number | null>(null);
   const breathCounterRef = useRef<number>(4);
   const breathPhaseRef = useRef<'inhale' | 'hold' | 'exhale'>('inhale');
   const [shuffleOffset, setShuffleOffset] = useState<number>(0);
@@ -83,8 +84,22 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
       if (breathTimerRef.current) {
         window.clearInterval(breathTimerRef.current);
       }
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
     };
   }, []);
+
+  useEffect(() => {
+    if (!showFavoritesModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowFavoritesModal(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showFavoritesModal]);
 
   const formatForStudent = (item: DailyAffirmation): DailyAffirmation => {
     const cleanName = studentName?.trim();
@@ -117,10 +132,9 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
     const safePool = pool.length > 0 ? pool : CURATED_AFFIRMATIONS;
     const nextOffset = shuffleOffset + 1;
     setShuffleOffset(nextOffset);
-    const currentIdx = safePool.findIndex(
-      (item) => currentAffirmation.id === item.id || currentAffirmation.quote.includes(item.quote.slice(12))
-    );
-    const nextItem = safePool[(Math.max(0, currentIdx) + 1) % safePool.length];
+    const currentIdx = safePool.findIndex((item) => currentAffirmation.id === item.id);
+    const nextIdx = currentIdx >= 0 ? (currentIdx + 1) % safePool.length : 0;
+    const nextItem = safePool[nextIdx];
     const formatted = formatForStudent(nextItem);
     setCurrentAffirmation(formatted);
     setIsFavorited(isAffirmationFavorited(formatted.quote));
@@ -168,14 +182,14 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
 
   const handleCopy = async () => {
     const shareText = `"${currentAffirmation.quote}"\n— ${currentAffirmation.author} (via MindGuard)`;
+    let didCopy = false;
     try {
       if (navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(shareText);
+        didCopy = true;
       } else {
         throw new Error('Clipboard unavailable');
       }
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2200);
     } catch {
       try {
         const ta = document.createElement('textarea');
@@ -184,13 +198,22 @@ const DailyAffirmationWidget: React.FC<DailyAffirmationWidgetProps> = ({
         ta.style.opacity = '0';
         document.body.appendChild(ta);
         ta.select();
-        document.execCommand('copy');
+        didCopy = document.execCommand('copy');
         document.body.removeChild(ta);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2200);
       } catch {
-        // ignore copy errors in restricted contexts
+        didCopy = false;
       }
+    }
+
+    if (didCopy) {
+      setCopied(true);
+      if (copyTimerRef.current !== null) {
+        window.clearTimeout(copyTimerRef.current);
+      }
+      copyTimerRef.current = window.setTimeout(() => {
+        setCopied(false);
+        copyTimerRef.current = null;
+      }, 2200);
     }
   };
 

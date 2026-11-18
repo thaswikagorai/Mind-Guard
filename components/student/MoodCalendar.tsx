@@ -22,7 +22,7 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 const MoodCalendar: React.FC = () => {
-  const [today] = useState<Date>(() => new Date());
+  const [today, setToday] = useState<Date>(() => new Date());
   const currentYear = today.getFullYear();
   const currentMonth = today.getMonth();
   const todayKey = useMemo(() => toLocalDateKey(today), [today]);
@@ -33,18 +33,36 @@ const MoodCalendar: React.FC = () => {
   const [selectedDateKey, setSelectedDateKey] = useState<string>(todayKey);
   const [noteInput, setNoteInput] = useState<string>('');
   const [showNoteInput, setShowNoteInput] = useState<boolean>(false);
+  const [showAllEntries, setShowAllEntries] = useState<boolean>(false);
 
   const refreshMoods = useCallback(() => {
-    setMonthMoods(getMonthMoodMap(currentYear, currentMonth));
-  }, [currentYear, currentMonth]);
+    const now = new Date();
+    const nowKey = toLocalDateKey(now);
+    setToday((prev) => {
+      const prevKey = toLocalDateKey(prev);
+      if (prevKey !== nowKey) {
+        setSelectedDateKey((sel) => (sel === prevKey ? nowKey : sel));
+        return now;
+      }
+      return prev;
+    });
+    setMonthMoods(getMonthMoodMap(now.getFullYear(), now.getMonth()));
+  }, []);
 
   useEffect(() => {
     refreshMoods();
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshMoods();
+      }
+    };
     window.addEventListener('focus', refreshMoods);
+    document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener(MOOD_UPDATED_EVENT, refreshMoods);
     window.addEventListener('storage', refreshMoods);
     return () => {
       window.removeEventListener('focus', refreshMoods);
+      document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener(MOOD_UPDATED_EVENT, refreshMoods);
       window.removeEventListener('storage', refreshMoods);
     };
@@ -265,6 +283,7 @@ const MoodCalendar: React.FC = () => {
                   onClick={() => {
                     setSelectedDateKey(cell.dateKey);
                     setShowNoteInput(false);
+                    setShowAllEntries(false);
                   }}
                   aria-label={ariaLabel}
                   aria-pressed={isSelected}
@@ -391,7 +410,7 @@ const MoodCalendar: React.FC = () => {
 
           {selectedSummary && selectedSummary.entries.length > 0 && (
             <div className="space-y-1.5 pt-1">
-              {selectedSummary.entries.slice(0, 4).map((entry) => {
+              {(showAllEntries ? selectedSummary.entries : selectedSummary.entries.slice(0, 4)).map((entry) => {
                 const meta = CALENDAR_MOOD_META[entry.mood];
                 const timeText = new Date(entry.timestamp).toLocaleTimeString('en-US', {
                   hour: 'numeric',
@@ -428,6 +447,18 @@ const MoodCalendar: React.FC = () => {
                   </div>
                 );
               })}
+
+              {selectedSummary.entries.length > 4 && (
+                <button
+                  type="button"
+                  onClick={() => setShowAllEntries((prev) => !prev)}
+                  className="text-xs font-semibold text-[#0f766e] hover:text-[#0f3d3e] py-1 transition-colors"
+                >
+                  {showAllEntries
+                    ? 'Show fewer entries'
+                    : `Show all ${selectedSummary.entries.length} entries`}
+                </button>
+              )}
             </div>
           )}
         </div>

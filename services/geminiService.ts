@@ -3,11 +3,18 @@ import {
   StressCheckInCameraAnalysis,
   TriageAssessmentPayload,
   TriageAssessmentResult,
+  SearchGroundedWellnessResponse,
 } from "../types";
+
+const isBrowserOffline = (): boolean =>
+  typeof navigator !== 'undefined' && navigator.onLine === false;
 
 export const runWellnessTriageAssessment = async (
   payload: TriageAssessmentPayload
 ): Promise<TriageAssessmentResult> => {
+  if (isBrowserOffline()) {
+    throw new Error('You appear to be offline. Connect to the internet to run AI wellness triage.');
+  }
   const response = await fetch('/api/stress-checkin/triage', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -32,6 +39,9 @@ export const analyzeStressCheckInFrame = async (
   imageBase64: string,
   mimeType: string = 'image/jpeg'
 ): Promise<StressCheckInCameraAnalysis> => {
+  if (isBrowserOffline()) {
+    throw new Error('You appear to be offline. Connect to the internet to analyze a camera snapshot.');
+  }
   const response = await fetch('/api/stress-checkin/analyze-frame', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -58,6 +68,10 @@ export const streamMentorChat = async (
   message: string,
   onChunk: (partialText: string) => void
 ): Promise<string> => {
+  if (isBrowserOffline()) {
+    throw new Error('You appear to be offline. Check your connection and tap Retry.');
+  }
+
   const controller = new AbortController();
   let timeoutId: number | undefined;
   const resetWatchdog = (ms: number) => {
@@ -420,6 +434,7 @@ export const generatePersonalizedDailyAffirmation = async (
     reflectionPrompt: "What is one thing about yourself that you appreciate today?",
     themeLabel: "Self-Belief",
   };
+  if (isBrowserOffline()) return fallback;
   try {
     const response = await fetch('/api/gemini/personalized-affirmation', {
       method: 'POST',
@@ -427,81 +442,153 @@ export const generatePersonalizedDailyAffirmation = async (
       body: JSON.stringify({ studentName, theme, recentMood }),
     });
     if (!response.ok) return fallback;
-    return await response.json();
+    const data = await response.json();
+    return {
+      quote: typeof data?.quote === 'string' && data.quote.trim() ? data.quote.trim() : fallback.quote,
+      author: typeof data?.author === 'string' && data.author.trim() ? data.author.trim() : fallback.author,
+      reflectionPrompt:
+        typeof data?.reflectionPrompt === 'string' && data.reflectionPrompt.trim()
+          ? data.reflectionPrompt.trim()
+          : fallback.reflectionPrompt,
+      themeLabel:
+        typeof data?.themeLabel === 'string' && data.themeLabel.trim()
+          ? data.themeLabel.trim()
+          : fallback.themeLabel,
+    };
   } catch {
     return fallback;
   }
 };
 
 export const generateParentalAdvice = async (stressData: StressReportData[]): Promise<{ title: string; content: string; icon: string }[]> => {
+  const fallback = [{ title: "Stay Close", content: "Just being present helps more than you know.", icon: "💙" }];
+  if (isBrowserOffline()) return fallback;
   try {
     const response = await fetch('/api/gemini/parental-advice', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stressData }),
     });
+    if (!response.ok) return fallback;
     const data = await response.json();
-    return Array.isArray(data.advice)
-      ? data.advice
-      : [{ title: "Stay Close", content: "Just being present helps more than you know.", icon: "💙" }];
+    if (!Array.isArray(data?.advice)) return fallback;
+    const valid = data.advice.filter(
+      (item: any): item is { title: string; content: string; icon: string } =>
+        item && typeof item.title === 'string' && typeof item.content === 'string'
+    );
+    return valid.length > 0 ? valid : fallback;
   } catch {
-    return [{ title: "Stay Close", content: "Just being present helps more than you know.", icon: "💙" }];
+    return fallback;
   }
 };
 
 export const analyzeJournalEntry = async (text: string): Promise<{ sentiment: string; themes: string[] }> => {
+  const fallback = { sentiment: 'Neutral', themes: [] as string[] };
+  if (isBrowserOffline()) return fallback;
   try {
     const response = await fetch('/api/gemini/analyze-journal', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     });
-    return await response.json();
+    if (!response.ok) return fallback;
+    const data = await response.json();
+    return {
+      sentiment:
+        typeof data?.sentiment === 'string' && data.sentiment.trim()
+          ? data.sentiment.trim()
+          : fallback.sentiment,
+      themes: Array.isArray(data?.themes)
+        ? data.themes.filter((t: unknown): t is string => typeof t === 'string' && t.trim().length > 0)
+        : [],
+    };
   } catch {
-    return { sentiment: 'Neutral', themes: [] };
+    return fallback;
   }
 };
 
 export const generateParentSummary = async (data: StressReportData[]): Promise<string> => {
+  const fallback = "Monitoring progress normally.";
+  if (isBrowserOffline()) return fallback;
   try {
     const response = await fetch('/api/gemini/parent-summary', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ data }),
     });
+    if (!response.ok) return fallback;
     const json = await response.json();
-    return json.text || "Monitoring progress normally.";
+    return typeof json?.text === 'string' && json.text.trim() ? json.text.trim() : fallback;
   } catch {
-    return "Monitoring progress normally.";
+    return fallback;
   }
 };
 
 export const generateParentActionPlan = async (stressData: StressReportData[], activities: string[]): Promise<string[]> => {
+  const fallback = ["Encourage a 5-minute break.", "Listen without judgment today.", "Check on their sleep tonight."];
+  if (isBrowserOffline()) return fallback;
   try {
     const response = await fetch('/api/gemini/parent-action-plan', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ stressData, activities }),
     });
+    if (!response.ok) return fallback;
     const data = await response.json();
-    return Array.isArray(data.steps)
-      ? data.steps
-      : ["Encourage a 5-minute break.", "Listen without judgment today.", "Check on their sleep tonight."];
+    if (!Array.isArray(data?.steps)) return fallback;
+    const valid = data.steps.filter((s: unknown): s is string => typeof s === 'string' && s.trim().length > 0);
+    return valid.length > 0 ? valid : fallback;
   } catch {
-    return ["Encourage a 5-minute break.", "Listen without judgment today.", "Check on their sleep tonight."];
+    return fallback;
   }
 };
 
 export const recommendMusicCategory = async (feeling: string): Promise<string> => {
+  if (isBrowserOffline()) return 'Relax';
   try {
     const response = await fetch('/api/gemini/recommend-music', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ feeling }),
     });
+    if (!response.ok) return 'Relax';
     const data = await response.json();
-    return data.category || 'Relax';
+    const raw = typeof data?.category === 'string' ? data.category.trim().toLowerCase() : '';
+    if (raw.includes('focus')) return 'Focus';
+    if (raw.includes('sleep')) return 'Sleep';
+    if (raw.includes('happy')) return 'Happy';
+    return 'Relax';
   } catch {
     return 'Relax';
   }
+};
+
+export const searchGroundedWellness = async (
+  query: string,
+  audience: 'student' | 'parent' = 'student',
+  context?: string
+): Promise<SearchGroundedWellnessResponse> => {
+  if (isBrowserOffline()) {
+    throw new Error('Live web search requires an internet connection.');
+  }
+  const response = await fetch('/api/gemini/search-resources', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, audience, context }),
+  });
+
+  if (!response.ok) {
+    let errMsg = 'Could not fetch search-grounded wellness results right now.';
+    try {
+      const errData = await response.json();
+      if (typeof errData?.error === 'string' && errData.error.trim()) {
+        errMsg = errData.error;
+      }
+    } catch {
+      // ignore non-JSON body
+    }
+    throw new Error(errMsg);
+  }
+
+  return response.json();
 };

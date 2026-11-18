@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import Card from './Card';
 import { BookOpenIcon, RefreshIcon } from '../icons';
 import { LiteratureClockQuote } from '../../types';
@@ -15,26 +15,52 @@ const LiteratureClockCard: React.FC<LiteratureClockCardProps> = ({ compact = fal
   const [quoteIndex, setQuoteIndex] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [source, setSource] = useState<'literature-clock' | 'classic-fallback'>('literature-clock');
+  const requestIdRef = useRef<number>(0);
+  const isMountedRef = useRef<boolean>(true);
 
   const currentMinuteKey = `${String(now.getHours()).padStart(2, '0')}:${String(
     now.getMinutes()
   ).padStart(2, '0')}`;
 
-  // Tick every second to stay locked precisely to the local clock minute transition
   useEffect(() => {
-    const interval = window.setInterval(() => {
-      setNow(new Date());
-    }, 1000);
-    return () => window.clearInterval(interval);
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Tick every second and resync immediately when returning to a throttled tab
+  useEffect(() => {
+    const syncClock = () => setNow(new Date());
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        syncClock();
+      }
+    };
+    const interval = window.setInterval(syncClock, 1000);
+    window.addEventListener('focus', syncClock);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', syncClock);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   const loadQuotesForCurrentMinute = useCallback(async (targetDate: Date) => {
+    const reqId = ++requestIdRef.current;
     setIsLoading(true);
-    const result = await fetchLiteratureClockQuotes(targetDate);
-    setQuotes(result.quotes);
-    setQuoteIndex(0);
-    setSource(result.source);
-    setIsLoading(false);
+    try {
+      const result = await fetchLiteratureClockQuotes(targetDate);
+      if (!isMountedRef.current || requestIdRef.current !== reqId) return;
+      setQuotes(result.quotes);
+      setQuoteIndex(0);
+      setSource(result.source);
+    } finally {
+      if (isMountedRef.current && requestIdRef.current === reqId) {
+        setIsLoading(false);
+      }
+    }
   }, []);
 
   useEffect(() => {

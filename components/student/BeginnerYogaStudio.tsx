@@ -473,16 +473,16 @@ const BeginnerYogaStudio: React.FC = () => {
   useEffect(() => {
     if (!timerRunning) return;
     const id = window.setInterval(() => {
-      setSecondsLeft((prev) => {
-        if (prev <= 1) {
-          setTimerRunning(false);
-          return 0;
-        }
-        return prev - 1;
-      });
+      setSecondsLeft((prev) => (prev <= 1 ? 0 : prev - 1));
     }, 1000);
     return () => window.clearInterval(id);
   }, [timerRunning]);
+
+  useEffect(() => {
+    if (timerRunning && secondsLeft === 0) {
+      setTimerRunning(false);
+    }
+  }, [timerRunning, secondsLeft]);
 
   const togglePracticed = useCallback((id: PoseId) => {
     setPracticedIds((prev) => {

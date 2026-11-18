@@ -139,12 +139,14 @@ const DeepBreathingGuide: React.FC<DeepBreathingGuideProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  // Reset cleanly whenever closed
+  // Reset cleanly whenever closed or reopened
   useEffect(() => {
-    if (!isOpen) {
+    if (isOpen) {
+      resetGuide(cadence);
+    } else {
       setIsRunning(false);
     }
-  }, [isOpen]);
+  }, [isOpen, resetGuide, cadence]);
 
   // 1-second timer driving CSS transition phases deterministically
   useEffect(() => {
