@@ -47,13 +47,16 @@ const MindGuardLogo = ({ size = 'lg' }: { size?: 'sm' | 'lg' }) => (
 );
 
 const SplashScreen = () => (
-  <div className="flex flex-col items-center justify-center h-full bg-gradient-to-br from-[#dffaf4] via-[#eef6ff] to-[#fff1ea] text-center p-6">
+  <div className="flex flex-col items-center justify-center h-full bg-gradient-to-br from-[#dffaf4] via-[#eef6ff] to-[#fff1ea] text-center p-6 select-none">
     <MindGuardLogo size="lg" />
     <h1 className="text-4xl sm:text-5xl font-bold text-[#0f3d3e] font-serif-elegant tracking-tight text-balance">
       MindGuard
     </h1>
     <p className="mt-3 text-base sm:text-lg text-[#0f766e] font-medium max-w-sm text-balance">
       Protecting Minds. Empowering Students.
+    </p>
+    <p className="mt-10 text-xs sm:text-sm font-semibold text-[#4b7476] tracking-wide animate-pulse">
+      Click anywhere to continue
     </p>
   </div>
 );
@@ -368,9 +371,16 @@ const App: React.FC = () => {
   const [inAppNudge, setInAppNudge] = useState<{ title: string; body: string } | null>(null);
 
   useEffect(() => {
-    const timer = setTimeout(() => setAppState('role_selection'), 1800);
-    return () => clearTimeout(timer);
-  }, []);
+    if (appState !== 'splash') return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        setAppState('role_selection');
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [appState]);
 
   // Browser push notification scheduler & Service Worker click routing for students
   useEffect(() => {
@@ -670,7 +680,15 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="h-screen w-screen bg-gradient-to-br from-[#dff8f2] via-[#e9f4ff] to-[#fff2eb] flex flex-col overflow-hidden relative">
+    <div
+      onClick={appState === 'splash' ? () => setAppState('role_selection') : undefined}
+      role={appState === 'splash' ? 'button' : undefined}
+      tabIndex={appState === 'splash' ? 0 : undefined}
+      aria-label={appState === 'splash' ? 'Click anywhere to enter MindGuard' : undefined}
+      className={`h-screen w-screen bg-gradient-to-br from-[#dff8f2] via-[#e9f4ff] to-[#fff2eb] flex flex-col overflow-hidden relative ${
+        appState === 'splash' ? 'cursor-pointer' : ''
+      }`}
+    >
       <OuterBotanicalSides />
       <div className="w-full max-w-5xl mx-auto flex-1 h-full md:my-5 md:h-[calc(100vh-2.5rem)] md:rounded-3xl md:border md:border-[#bde6de] bg-[#eefaf7] md:shadow-[0_20px_50px_-24px_rgba(15,61,62,0.18)] flex flex-col relative z-10 overflow-hidden">
         <InnerSideLeafRim />
